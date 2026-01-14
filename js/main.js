@@ -5,7 +5,7 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 
 // Socket connection
-const socket = io('http://localhost:3000', {
+const socket = io(window.location.origin, {
     reconnection: true,
     reconnectionAttempts: 5,
     reconnectionDelay: 1000

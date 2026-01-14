@@ -16,7 +16,7 @@ const io = socketIo(server, {
   maxHttpBufferSize: 1e6  // 1MB buffer
 });
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // Serve static files (client)
 app.use(express.static(path.join(__dirname, '..')));
