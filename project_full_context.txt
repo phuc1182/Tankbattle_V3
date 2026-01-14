@@ -1,0 +1,3289 @@
+
+====================
+FILE: AudioManager.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\js\AudioManager.js
+====================
+class AudioManager {
+    constructor() {
+        this.sounds = {};        // {name: Audio instance}
+        this.soundInstances = {}; // {name: [Audio instances]} - cho overlapping
+        this.music = null;
+        
+        // === AUDIO OVERLAPPING CONFIG ===
+        // Chọn phương pháp xử lý overlapping cho sound ngắn (shooting, impact)
+        // 'clone': Dùng cloneNode() - đơn giản, hỗ trợ tốt
+        // 'pool': Object pooling - tối ưu hóa, tránh tạo instance mới mỗi lần
+        this.overlapMethod = 'clone'; // 'clone' | 'pool'
+        
+        // Cho pooling method: số instance pool mỗi sound
+        this.soundPoolSize = 5; // 5 instance cho mỗi sound
+        this.soundPools = {}; // {name: [pool of Audio instances]}
+        
+        // Tracking: âm thanh đang phát (để cleanup)
+        this.activeSounds = []; // Array các Audio instance đang phát
+    }
+
+    loadSound(name, src) {
+        // Tạo master Audio instance
+        this.sounds[name] = new Audio(src);
+        
+        // === INIT SOUND POOLING ===
+        // Nếu dùng pool method, tạo sẵn pool
+        if (this.overlapMethod === 'pool') {
+            this.soundPools[name] = [];
+            for (let i = 0; i < this.soundPoolSize; i++) {
+                const audio = new Audio(src);
+                audio.preload = 'auto';
+                this.soundPools[name].push(audio);
+            }
+        }
+        
+        // Init soundInstances array
+        this.soundInstances[name] = [];
+    }
+
+    /**
+     * Phát âm thanh với hỗ trợ overlapping
+     * @param {string} name - Tên âm thanh
+     * @param {boolean} loop - Có lặp lại không
+     * @param {boolean} allowOverlap - Cho phép âm thanh chồng lên nhau (default: true cho shoot)
+     */
+    playSound(name, loop = false, allowOverlap = true) {
+        if (!this.sounds[name]) return;
+
+        // === PHƯƠNG PHÁP 1: CLONE NODE ===
+        if (this.overlapMethod === 'clone' && allowOverlap) {
+            try {
+                // Clone audio node để phát song song
+                const audioClone = this.sounds[name].cloneNode();
+                audioClone.loop = loop;
+                audioClone.volume = 1.0;
+                
+                // Phát âm thanh
+                const playPromise = audioClone.play();
+                if (playPromise !== undefined) {
+                    playPromise.catch(e => console.warn(`Audio play failed: ${name}`, e));
+                }
+                
+                // Cleanup sau khi âm thanh kết thúc
+                if (!loop) {
+                    const onEnded = () => {
+                        audioClone.pause();
+                        audioClone.currentTime = 0;
+                        this.activeSounds = this.activeSounds.filter(s => s !== audioClone);
+                    };
+                    audioClone.addEventListener('ended', onEnded, { once: true });
+                }
+                
+                // Track active sound
+                this.activeSounds.push(audioClone);
+                
+                return audioClone;
+            } catch (e) {
+                console.warn(`Clone audio failed: ${name}`, e);
+                // Fallback: phát âm thanh thường (cắt cũ)
+                this._playSoundDefault(name, loop);
+            }
+        }
+        // === PHƯƠNG PHÁP 2: SOUND POOLING ===
+        else if (this.overlapMethod === 'pool' && allowOverlap && this.soundPools[name]) {
+            const pool = this.soundPools[name];
+            
+            // Tìm audio instance đã kết thúc
+            let audioToUse = null;
+            for (let audio of pool) {
+                if (audio.paused || audio.ended) {
+                    audioToUse = audio;
+                    break;
+                }
+            }
+            
+            // Nếu tất cả đang phát, tạo instance mới (fallback)
+            if (!audioToUse) {
+                audioToUse = new Audio(this.sounds[name].src);
+                pool.push(audioToUse);
+            }
+            
+            // Reset và phát
+            audioToUse.currentTime = 0;
+            audioToUse.loop = loop;
+            audioToUse.volume = 1.0;
+            
+            const playPromise = audioToUse.play();
+            if (playPromise !== undefined) {
+                playPromise.catch(e => console.warn(`Audio play failed: ${name}`, e));
+            }
+            
+            return audioToUse;
+        }
+        // === DEFAULT: PHÁT THƯỜNG (CẮT CŨ) ===
+        else {
+            this._playSoundDefault(name, loop);
+        }
+    }
+
+    /**
+     * Phát âm thanh mặc định (cắt âm thanh cũ nếu đang phát)
+     * @private
+     */
+    _playSoundDefault(name, loop) {
+        if (this.sounds[name]) {
+            const audio = this.sounds[name];
+            audio.currentTime = 0;
+            audio.loop = loop;
+            
+            const playPromise = audio.play();
+            if (playPromise !== undefined) {
+                playPromise.catch(e => {});
+            }
+            
+            return audio;
+        }
+    }
+
+    stopSound(name) {
+        if (this.sounds[name]) {
+            this.sounds[name].pause();
+            this.sounds[name].currentTime = 0;
+        }
+        
+        // Stop tất cả clones của sound này
+        if (this.soundInstances[name]) {
+            this.soundInstances[name].forEach(audio => {
+                audio.pause();
+                audio.currentTime = 0;
+            });
+            this.soundInstances[name] = [];
+        }
+    }
+
+    /**
+     * Dừng tất cả âm thanh đang phát
+     */
+    stopAllSounds() {
+        // Stop master instances
+        Object.values(this.sounds).forEach(audio => {
+            audio.pause();
+            audio.currentTime = 0;
+        });
+        
+        // Stop clone instances
+        this.activeSounds.forEach(audio => {
+            audio.pause();
+            audio.currentTime = 0;
+        });
+        this.activeSounds = [];
+        
+        // Stop pool instances
+        Object.values(this.soundPools).forEach(pool => {
+            pool.forEach(audio => {
+                audio.pause();
+                audio.currentTime = 0;
+            });
+        });
+    }
+
+    playMusic(src) {
+        if (this.music) {
+            this.music.pause();
+        }
+        this.music = new Audio(src);
+        this.music.loop = true;
+        this.music.volume = 0.5; // Giảm âm lượng nhạc nền
+        this.music.play().catch(e => {});
+    }
+
+    stopMusic() {
+        if (this.music) {
+            this.music.pause();
+        }
+    }
+
+    /**
+     * Thay đổi phương pháp xử lý overlapping
+     * @param {string} method - 'clone' hoặc 'pool'
+     */
+    setOverlapMethod(method) {
+        if (method === 'clone' || method === 'pool') {
+            this.overlapMethod = method;
+            console.log(`Audio overlap method changed to: ${method}`);
+        } else {
+            console.warn(`Invalid overlap method: ${method}`);
+        }
+    }
+
+    /**
+     * Lấy thông tin về âm thanh đang phát
+     */
+    getAudioStats() {
+        const activeSoundCount = this.activeSounds.filter(s => !s.paused && !s.ended).length;
+        const totalPoolSize = Object.values(this.soundPools).reduce((sum, pool) => sum + pool.length, 0);
+        
+        return {
+            method: this.overlapMethod,
+            activeSoundCount,
+            totalPoolSize,
+            activeSoundInstances: this.activeSounds.length
+        };
+    }
+
+    // Batch load sounds with progress
+    loadSounds(sources, progressCb, doneCb) {
+        const keys = Object.keys(sources);
+        const total = keys.length;
+        if (total === 0) {
+            if (typeof doneCb === 'function') doneCb();
+            return;
+        }
+        let loaded = 0;
+        keys.forEach((key) => {
+            const audio = new Audio(sources[key]);
+            const onDone = () => {
+                loaded++;
+                this.sounds[key] = audio;
+                
+                // Init sound instances array
+                this.soundInstances[key] = [];
+                
+                // Init pooling nếu dùng pool method
+                if (this.overlapMethod === 'pool') {
+                    this.soundPools[key] = [];
+                    for (let i = 0; i < this.soundPoolSize; i++) {
+                        const poolAudio = new Audio(sources[key]);
+                        poolAudio.preload = 'auto';
+                        this.soundPools[key].push(poolAudio);
+                    }
+                }
+                
+                if (typeof progressCb === 'function') progressCb(loaded, total);
+                if (loaded === total && typeof doneCb === 'function') doneCb();
+                audio.removeEventListener('canplaythrough', onDone);
+                audio.removeEventListener('error', onDone);
+            };
+            audio.addEventListener('canplaythrough', onDone, { once: true });
+            audio.addEventListener('error', onDone, { once: true });
+            // Trigger load
+            audio.load();
+        });
+    }
+}
+
+====================
+FILE: Bullet.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\js\Bullet.js
+====================
+class Bullet {
+    // Client-side bullet wrapper cho prediction
+    constructor(serverData) {
+        this.id = serverData.id;
+        // Vị trí hiện tại (client tự tính)
+        this.x = serverData.x;
+        this.y = serverData.y;
+        // Vị trí từ server (để sync)
+        this.serverX = serverData.x;
+        this.serverY = serverData.y;
+        this.dx = serverData.dx;
+        this.dy = serverData.dy;
+        this.speed = serverData.speed || SharedConstants.BULLET_SPEED; // Lấy từ SharedConstants
+        this.type = serverData.type;
+        this.lastUpdateTime = Date.now();
+    }
+
+    // Update từ server data
+    updateFromServer(serverData) {
+        // Sync lại vị trí từ server (với lerp nhẹ để tránh giật)
+        this.serverX = serverData.x;
+        this.serverY = serverData.y;
+        this.dx = serverData.dx;
+        this.dy = serverData.dy;
+        this.type = serverData.type;
+        // Lerp về vị trí server (correction)
+        const correctionFactor = 0.3;
+        this.x += (this.serverX - this.x) * correctionFactor;
+        this.y += (this.serverY - this.y) * correctionFactor;
+        this.lastUpdateTime = Date.now();
+    }
+
+    // Client-side prediction: tự tính vị trí mỗi frame
+    update() {
+        this.x += this.dx * this.speed;
+        this.y += this.dy * this.speed;
+    }
+
+    draw(ctx) {
+        const image = IMAGES.bullet;
+        if (image) {
+            ctx.drawImage(image, this.x - 8, this.y - 8, 16, 16);
+        } else {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 5, 0, Math.PI * 2);
+            if (this.type === 1) ctx.fillStyle = "orange";
+            else if (this.type === 2) ctx.fillStyle = "red";
+            else if (this.type === 3) ctx.fillStyle = "yellow";
+            ctx.fill();
+            ctx.closePath();
+        }
+    }
+
+    // Static method để vẽ raw data từ server (backward compatibility)
+    static drawRaw(ctx, bulletData) {
+        const image = IMAGES.bullet;
+        if (image) {
+            ctx.drawImage(image, bulletData.x - 8, bulletData.y - 8, 16, 16);
+        } else {
+            ctx.beginPath();
+            ctx.arc(bulletData.x, bulletData.y, 5, 0, Math.PI * 2);
+            if (bulletData.type === 1) ctx.fillStyle = "orange";
+            else if (bulletData.type === 2) ctx.fillStyle = "red";
+            else if (bulletData.type === 3) ctx.fillStyle = "yellow";
+            ctx.fill();
+            ctx.closePath();
+        }
+    }
+}
+
+====================
+FILE: Config.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\js\Config.js
+====================
+// Config.js - Cấu hình game
+// Tất cả các hằng số game giờ được quản lý trong SharedConstants.js
+// File này chỉ giữ lại cấu hình controls người chơi
+
+let controlsP1 = { up: 'w', down: 's', left: 'a', right: 'd', shoot: ' ' };
+
+// Global
+window.controlsP1 = controlsP1;
+
+====================
+FILE: Game.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\js\Game.js
+====================
+// Game.js - Logic game chính (multiplayer)
+let gameMap, tank1, tank2;
+let bullets = []; // Mảng Bullet objects với client-side prediction
+let bulletMap = new Map(); // Map id -> Bullet instance
+window.bulletMap = bulletMap; // Expose globally cho Tank.js
+let items = [];
+let particleSystem;
+let isGameOver = false;
+
+// DOM elements
+const gameOverLayer = document.getElementById('game-over-layer');
+const winnerText = document.getElementById('winner-text');
+const restartBtn = document.getElementById('restartBtn');
+const homeBtn = document.getElementById('homeBtn');
+
+function initGame() {
+    // Tạo Map từ server
+    gameMap = new GameMap(window.gameState.map.width, window.gameState.map.height, SharedConstants.TILE_SIZE);
+    gameMap.walls = window.gameState.map.walls;
+
+    // Tạo tanks instances
+    tank1 = new Tank(0, 0, "tank1", "p1");
+    tank2 = new Tank(0, 0, "tank2", "p2");
+
+    // Reset input state khi (re)join
+    tank1.resetInput();
+    tank2.resetInput();
+
+    // Setup controls chỉ cho tank của player hiện tại
+    if (window.isP1) {
+        tank1.setupControls();
+    } else {
+        tank2.setupControls();
+    }
+
+    // Tạo hệ thống hạt
+    particleSystem = new ParticleSystem();
+    window.particleSystem = particleSystem;
+
+    // Items từ server
+    items = window.gameState.items;
+
+    // Phát nhạc nền
+    if (window.audioManager) {
+        window.audioManager.playMusic('sounds/bgmusic.mp3');
+    }
+
+    // Start rendering
+    window.renderGame();
+}
+
+// Hàm render game (thay cho gameLoop)
+function renderGame() {
+    if (!window.gameState) return;
+
+    // Update local state
+    const oldItems = items || [];
+    items = window.gameState.items; // Sử dụng raw data từ server
+
+    // Client-side bullet prediction: Sync với server và tự update
+    const oldBulletIds = new Set(bulletMap.keys());
+    const serverBullets = window.gameState.bullets;
+    const currentBulletIds = new Set();
+
+    // Update hoặc tạo bullets từ server
+    serverBullets.forEach(serverBullet => {
+        currentBulletIds.add(serverBullet.id);
+        if (bulletMap.has(serverBullet.id)) {
+            // Đã có - update từ server
+            bulletMap.get(serverBullet.id).updateFromServer(serverBullet);
+        } else {
+            // Mới - tạo Bullet instance
+            bulletMap.set(serverBullet.id, new Bullet(serverBullet));
+        }
+    });
+
+    // Xóa bullets không còn trên server
+    const removedBulletIds = [];
+    oldBulletIds.forEach(id => {
+        if (!currentBulletIds.has(id)) {
+            const bullet = bulletMap.get(id);
+            if (bullet) removedBulletIds.push(bullet);
+            bulletMap.delete(id);
+        }
+    });
+
+    // Client-side prediction: Tự update vị trí bullets mỗi frame
+    bulletMap.forEach(bullet => bullet.update());
+    bullets = Array.from(bulletMap.values());
+
+    const players = Object.values(window.gameState.players);
+    const p1Data = players.find(p => p.id === 'p1');
+    const p2Data = players.find(p => p.id === 'p2');
+    if (p1Data) {
+        tank1.updateFromData(p1Data);
+        tank1.update(); // Lerp vị trí để chuyển động mượt mà
+        // Tạo bụi khi xe di chuyển (phía sau xe)
+        if (particleSystem && (p1Data.keys?.up || p1Data.keys?.down || p1Data.keys?.left || p1Data.keys?.right)) {
+            if (Math.random() < 0.3) { // 30% chance mỗi frame
+                // Tính vị trí bụi phía sau xe (ngược hướng đi)
+                const dustX = p1Data.x + p1Data.width/2 - p1Data.lastDx * 20;
+                const dustY = p1Data.y + p1Data.height/2 - p1Data.lastDy * 20;
+                particleSystem.createDust(dustX, dustY, 1);
+            }
+        }
+    }
+    if (p2Data) {
+        tank2.updateFromData(p2Data);
+        tank2.update(); // Lerp vị trí để chuyển động mượt mà
+        // Tạo bụi khi xe di chuyển (phía sau xe)
+        if (particleSystem && (p2Data.keys?.up || p2Data.keys?.down || p2Data.keys?.left || p2Data.keys?.right)) {
+            if (Math.random() < 0.3) {
+                const dustX = p2Data.x + p2Data.width/2 - p2Data.lastDx * 20;
+                const dustY = p2Data.y + p2Data.height/2 - p2Data.lastDy * 20;
+                particleSystem.createDust(dustX, dustY, 1);
+            }
+        }
+    }
+
+    // Không phát âm thanh khi đạn đang bay, chỉ phát khi nhấn bắn (xử lý ở Tank.setupControls)
+
+    // Phát hiện đạn bị xóa (va chạm tường/người) để tạo hiệu ứng nổ
+    if (particleSystem && removedBulletIds.length > 0) {
+        removedBulletIds.forEach(bullet => {
+            const inMap = bullet.x >= 0 && bullet.x <= window.gameState.map.width && 
+                          bullet.y >= 0 && bullet.y <= window.gameState.map.height;
+            if (inMap) {
+                const color = bullet.type === 2 ? 'red' : bullet.type === 3 ? 'yellow' : 'orange';
+                particleSystem.createExplosion(bullet.x, bullet.y, 8, color, 25, 3);
+            }
+        });
+    }
+
+    isGameOver = window.gameState.isGameOver;
+
+    if (isGameOver && window.gameState.winner) {
+        endGame(window.gameState.winner);
+        return; // Dừng render loop
+    }
+
+    // Chọn targetTank và dữ liệu người chơi hiện tại
+    const targetTank = window.isP1 ? tank1 : tank2;
+    const myPlayerData = window.isP1 ? p1Data : p2Data;
+
+    // Phát hiện item bị nhặt gần mình (tránh trigger khi item ra khỏi viewport)
+    if (oldItems.length > 0 && items.length <= oldItems.length) {
+        let pickedNearMe = false;
+        const tol = 2;
+        const radius = 80;
+        if (targetTank) {
+            oldItems.forEach(oi => {
+                const stillExists = items.some(ni => ni.type === oi.type && Math.abs(ni.x - oi.x) < tol && Math.abs(ni.y - oi.y) < tol);
+                if (!stillExists) {
+                    const dx = (oi.x + 15) - (targetTank.x + targetTank.width / 2);
+                    const dy = (oi.y + 15) - (targetTank.y + targetTank.height / 2);
+                    if (Math.hypot(dx, dy) < radius) {
+                        pickedNearMe = true;
+                    }
+                }
+            });
+        }
+        if (pickedNearMe && window.audioManager) window.audioManager.playSound('pickup');
+    }
+
+    // Update particle system
+    if (particleSystem) {
+        particleSystem.update();
+    }
+
+    // Render
+    window.renderPlayerScreen(window.ctx, window.canvas, targetTank, gameMap, bullets, tank1, tank2, items, particleSystem, myPlayerData);
+
+    requestAnimationFrame(renderGame);
+}
+
+// Hàm gọi khi có người hết máu
+function endGame(winnerId) {
+    // Chỉ hiển thị game over 1 lần
+    if (gameOverLayer.style.display === 'flex') return;
+    
+    isGameOver = true;
+    
+    // Dừng nhạc nền
+    if (window.audioManager) window.audioManager.stopMusic();
+    
+    // Hiện bảng thông báo
+    gameOverLayer.style.display = 'flex';
+    winnerText.innerText = winnerId.toUpperCase() + " CHIẾN THẮNG!";
+    
+    // Đổi màu chữ
+    if (winnerId === "p1") {
+        winnerText.style.color = "#3498db";
+    } else {
+        winnerText.style.color = "#e74c3c";
+    }
+    
+    console.log('Game Over! Winner:', winnerId);
+}
+
+// Global
+window.initGame = initGame;
+window.renderGame = renderGame;
+window.endGame = endGame;
+window.gameMap = gameMap;
+window.tank1 = tank1;
+window.tank2 = tank2;
+window.bullets = bullets;
+window.items = items;
+window.particleSystem = particleSystem;
+window.isGameOver = isGameOver;
+
+====================
+FILE: ImageLoader.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\js\ImageLoader.js
+====================
+// ImageLoader.js - Quản lý hình ảnh
+const IMAGES = {}; // Biến chứa tất cả ảnh đã load
+
+function loadImages(doneCb, progressCb) {
+    const sources = {
+        tank1: 'images/tank1.png',
+        tank2: 'images/tank2.png',
+        wall:  'images/wall.png',
+        bg:    'images/bg.png',
+        bullet:'images/bullet.png'
+    };
+
+    const keys = Object.keys(sources);
+    const total = keys.length;
+    let loaded = 0;
+
+    keys.forEach((key) => {
+        IMAGES[key] = new Image();
+        IMAGES[key].src = sources[key];
+        IMAGES[key].onload = () => {
+            loaded++;
+            if (typeof progressCb === 'function') {
+                progressCb(loaded, total);
+            }
+            if (loaded === total && typeof doneCb === 'function') {
+                doneCb();
+            }
+        };
+        IMAGES[key].onerror = () => {
+            // Vẫn tăng để không kẹt loading nếu ảnh lỗi
+            loaded++;
+            if (typeof progressCb === 'function') {
+                progressCb(loaded, total);
+            }
+            if (loaded === total && typeof doneCb === 'function') {
+                doneCb();
+            }
+        };
+    });
+}
+
+// Global
+window.IMAGES = IMAGES;
+window.loadImages = loadImages;
+
+====================
+FILE: Items.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\js\Items.js
+====================
+class Item {
+    constructor(x, y, type) {
+        this.x = x;
+        this.y = y;
+        this.type = type; // 1: Heal, 2: Speed, 3: Shield, 4: Damage, 5: Piercing, 6: Explosive
+        this.width = 30;
+        this.height = 30;
+    }
+
+    // Static method để vẽ item từ raw data (tối ưu bộ nhớ)
+    static drawRaw(ctx, item) {
+        const width = 30;
+        const height = 30;
+        ctx.save();
+        
+        if (item.type === 1) {
+            // Heal
+            ctx.fillStyle = "#00ff00";
+            ctx.fillRect(item.x, item.y, width, height);
+            ctx.fillStyle = "white"; ctx.font = "bold 20px Arial";
+            ctx.fillText("H", item.x + 8, item.y + 22);
+        } else if (item.type === 2) {
+            // Speed
+            ctx.fillStyle = "yellow";
+            ctx.fillRect(item.x, item.y, width, height);
+            ctx.fillStyle = "black"; ctx.font = "bold 20px Arial";
+            ctx.fillText("S", item.x + 8, item.y + 22);
+        } else if (item.type === 3) {
+            // Shield
+            ctx.fillStyle = "#808080";
+            ctx.fillRect(item.x, item.y, width, height);
+            ctx.fillStyle = "white"; ctx.font = "bold 20px Arial";
+            ctx.fillText("G", item.x + 8, item.y + 22);
+        } else if (item.type === 4) {
+            // Damage boost
+            ctx.fillStyle = "#ff0000";
+            ctx.fillRect(item.x, item.y, width, height);
+            ctx.fillStyle = "white"; ctx.font = "bold 20px Arial";
+            ctx.fillText("D", item.x + 8, item.y + 22);
+        } else if (item.type === 5) {
+            // Piercing bullets
+            ctx.fillStyle = "#800080";
+            ctx.fillRect(item.x, item.y, width, height);
+            ctx.fillStyle = "white"; ctx.font = "bold 20px Arial";
+            ctx.fillText("P", item.x + 8, item.y + 22);
+        } else if (item.type === 6) {
+            // Explosive bullets
+            ctx.fillStyle = "#000000";
+            ctx.fillRect(item.x, item.y, width, height);
+            ctx.fillStyle = "white"; ctx.font = "bold 20px Arial";
+            ctx.fillText("E", item.x + 8, item.y + 22);
+        }
+        
+        // Vẽ viền sáng
+        ctx.strokeStyle = "white";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(item.x, item.y, width, height);
+        
+        ctx.restore();
+    }
+
+    draw(ctx) {
+        // Nếu bạn có ảnh thì thay bằng drawImage, ở đây tôi dùng màu để dễ test
+        ctx.save();
+        
+        if (this.type === 1) {
+            // Heal
+            ctx.fillStyle = "#00ff00";
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            ctx.fillStyle = "white"; ctx.font = "bold 20px Arial";
+            ctx.fillText("H", this.x + 8, this.y + 22);
+        } else if (this.type === 2) {
+            // Speed
+            ctx.fillStyle = "yellow";
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            ctx.fillStyle = "black"; ctx.font = "bold 20px Arial";
+            ctx.fillText("S", this.x + 8, this.y + 22);
+        } else if (this.type === 3) {
+            // Shield
+            ctx.fillStyle = "#808080";
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            ctx.fillStyle = "white"; ctx.font = "bold 20px Arial";
+            ctx.fillText("G", this.x + 8, this.y + 22);
+        } else if (this.type === 4) {
+            // Damage boost
+            ctx.fillStyle = "#ff0000";
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            ctx.fillStyle = "white"; ctx.font = "bold 20px Arial";
+            ctx.fillText("D", this.x + 8, this.y + 22);
+        } else if (this.type === 5) {
+            // Piercing bullets
+            ctx.fillStyle = "#800080";
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            ctx.fillStyle = "white"; ctx.font = "bold 20px Arial";
+            ctx.fillText("P", this.x + 8, this.y + 22);
+        } else if (this.type === 6) {
+            // Explosive bullets
+            ctx.fillStyle = "#000000";
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            ctx.fillStyle = "white"; ctx.font = "bold 20px Arial";
+            ctx.fillText("E", this.x + 8, this.y + 22);
+        }
+        
+        // Vẽ viền sáng
+        ctx.strokeStyle = "white";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(this.x, this.y, this.width, this.height);
+        
+        ctx.restore();
+    }
+}
+
+====================
+FILE: main.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\js\main.js
+====================
+// main.js - File chính khởi động game
+
+// Lấy Context
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+// Socket connection
+const socket = io('http://localhost:3000', {
+    reconnection: true,
+    reconnectionAttempts: 5,
+    reconnectionDelay: 1000
+});
+window.socket = socket; // Make socket global for Tank.js
+
+// Set canvas for Game
+window.canvas = canvas;
+window.ctx = ctx;
+
+// UI elements
+const lobbyLayer = document.getElementById('lobby-layer');
+const waitingLayer = document.getElementById('waiting-layer');
+const loadingLayer = document.getElementById('loading-layer');
+const loadingProgressBar = document.getElementById('loading-progress');
+const loadingText = document.getElementById('loading-text');
+const createRoomBtn = document.getElementById('createRoomBtn');
+const joinRoomBtn = document.getElementById('joinRoomBtn');
+const roomIdInput = document.getElementById('roomIdInput');
+const startGameBtn = document.getElementById('startGameBtn');
+const leaveRoomBtn = document.getElementById('leaveRoomBtn');
+const roomIdText = document.getElementById('room-id-text');
+const playerCountText = document.getElementById('player-count-text');
+const copyRoomIdBtn = document.getElementById('copyRoomIdBtn');
+
+// Create room
+createRoomBtn.addEventListener('click', () => {
+    const roomId = Math.random().toString(36).substr(2, 8).toUpperCase();
+    socket.emit('createRoom', { roomId });
+    window.roomId = roomId;
+});
+
+// Join room
+joinRoomBtn.addEventListener('click', () => {
+    const roomId = roomIdInput.value.trim();
+    if (!roomId) {
+        alert('Vui lòng nhập Room ID!');
+        return;
+    }
+    console.log('Attempting to join room:', roomId);
+    socket.emit('joinRoom', { roomId });
+    window.roomId = roomId;
+});
+
+// Start game (chỉ host mới có nút này)
+startGameBtn.addEventListener('click', () => {
+    socket.emit('startGame', { roomId: window.roomId });
+});
+
+// Copy Room ID
+copyRoomIdBtn.addEventListener('click', () => {
+    const roomId = window.roomId;
+    console.log('Copying Room ID:', roomId, 'Length:', roomId?.length);
+    if (!roomId) {
+        alert('Chưa có Room ID!');
+        return;
+    }
+    navigator.clipboard.writeText(roomId).then(() => {
+        const originalText = copyRoomIdBtn.textContent;
+        copyRoomIdBtn.textContent = '✓ ĐÃ COPY!';
+        copyRoomIdBtn.style.backgroundColor = '#27ae60';
+        console.log('Successfully copied:', roomId);
+        setTimeout(() => {
+            copyRoomIdBtn.textContent = originalText;
+            copyRoomIdBtn.style.backgroundColor = '#3498db';
+        }, 2000);
+    }).catch(err => {
+        alert('Không thể copy. Vui lòng copy thủ công: ' + roomId);
+        console.error('Copy failed:', err);
+    });
+});
+
+// Leave room
+leaveRoomBtn.addEventListener('click', () => {
+    socket.emit('leaveRoom', { roomId: window.roomId });
+    waitingLayer.style.display = 'none';
+    lobbyLayer.style.display = 'flex';
+    window.roomId = null;
+    roomIdInput.value = '';
+});
+
+socket.on('connect', () => {
+    console.log('Connected to server');
+});
+
+socket.on('disconnect', () => {
+    console.log('Disconnected from server');
+});
+
+socket.on('connect_error', (error) => {
+    console.error('Connection error:', error);
+    // Chỉ cảnh báo nếu không tự động reconnect được
+    // Socket.IO sẽ tự thử reconnect theo cấu hình
+});
+
+socket.io.on('reconnect_attempt', (attempt) => {
+    console.log('Reconnecting...', attempt);
+});
+
+socket.io.on('reconnect', (attempt) => {
+    console.log('Reconnected after', attempt, 'attempt(s)');
+});
+
+socket.io.on('reconnect_failed', () => {
+    console.error('Reconnection failed');
+    alert('Mất kết nối với server. Vui lòng tải lại trang.');
+});
+
+socket.on('roomCreated', (data) => {
+    console.log('Room created event received:', data);
+    console.log('Room ID:', data.roomId, 'Length:', data.roomId.length);
+    lobbyLayer.style.display = 'none';
+    waitingLayer.style.display = 'flex';
+    roomIdText.textContent = data.roomId;
+    window.roomId = data.roomId; // Đảm bảo window.roomId được set
+    playerCountText.textContent = '1/2';
+    window.playerId = data.playerId;
+    window.isP1 = data.isP1;
+    // Host có nút Start (hiển khi đủ 2 người)
+    startGameBtn.style.display = 'none';
+    console.log('Room ID displayed:', roomIdText.textContent, 'window.roomId:', window.roomId);
+});
+socket.on('joinedRoom', (data) => {
+    console.log('Successfully joined room!', data);
+    lobbyLayer.style.display = 'none';
+    waitingLayer.style.display = 'flex';
+    roomIdText.textContent = window.roomId;
+    playerCountText.textContent = data.playerCount + '/2';
+    window.playerId = data.playerId;
+    window.isP1 = data.isP1;
+    if (data.playerCount === 2) {
+        document.querySelector('.waiting-msg').textContent = 'Đủ người chơi! Đang chờ host bắt đầu...';
+    }
+});
+socket.on('playerJoined', (data) => {
+    playerCountText.textContent = data.playerCount + '/2';
+    if (data.playerCount === 2 && window.isP1) {
+        // Hiển nút Start cho host
+        startGameBtn.style.display = 'block';
+        document.querySelector('.waiting-msg').textContent = 'Đủ người chơi! Nhấn Start để bắt đầu.';
+    } else if (data.playerCount === 2) {
+        document.querySelector('.waiting-msg').textContent = 'Đủ người chơi! Đang chờ host bắt đầu...';
+    }
+});
+
+socket.on('roomFull', () => {
+    alert('Phòng đã đầy! Mỗi phòng chỉ chứa tối đa 2 người chơi.');
+    window.roomId = null;
+    roomIdInput.value = '';
+});
+
+socket.on('roomNotFound', () => {
+    console.log('Room not found!');
+    alert('Không tìm thấy phòng! Vui lòng kiểm tra lại Room ID.');
+    waitingLayer.style.display = 'none';
+    lobbyLayer.style.display = 'flex';
+    window.roomId = null;
+    roomIdInput.value = '';
+});
+
+socket.on('gameStarted', () => {
+    waitingLayer.style.display = 'none';
+});
+
+socket.on('joined', (data) => {
+    window.playerId = data.playerId;
+    window.isP1 = data.isP1;
+});
+
+socket.on('gameState', (gameState) => {
+    window.gameState = gameState;
+    window.initGame();
+});
+
+socket.on('updateState', (gameState) => {
+    window.gameState = gameState;
+    // XÓA window.renderGame() vì renderGame đang chạy trong vòng lặp requestAnimationFrame bên Game.js
+});
+
+// Loading flow: images -> sounds -> show lobby
+function setLoading(percent, text) {
+    loadingProgressBar.style.width = `${percent}%`;
+    loadingText.textContent = text;
+}
+
+function startLoading() {
+    loadingLayer.style.display = 'flex';
+    lobbyLayer.style.display = 'none';
+
+    // Load images (0% -> 50%)
+    setLoading(0, 'Đang tải hình ảnh (0%)');
+    window.loadImages(() => {
+        setLoading(50, 'Đã tải hình ảnh xong (50%)');
+        // Load sounds (50% -> 100%)
+        const am = new AudioManager();
+        window.audioManager = am;
+        const soundSources = {
+            shoot: 'sounds/shoot.mp3',
+            pickup: 'sounds/pickup.mp3',
+            bgmusic: 'sounds/bgmusic.mp3'
+        };
+        am.loadSounds(soundSources, (loaded, total) => {
+            const pct = 50 + Math.floor((loaded / total) * 50);
+            setLoading(pct, `Đang tải âm thanh (${pct}%)`);
+        }, () => {
+            setLoading(100, 'Hoàn tất!');
+            // Small delay for UX
+            setTimeout(() => {
+                loadingLayer.style.display = 'none';
+                lobbyLayer.style.display = 'flex';
+                window.initUI();
+            }, 200);
+        });
+    }, (loaded, total) => {
+        const pct = Math.floor((loaded / total) * 50);
+        setLoading(pct, `Đang tải hình ảnh (${pct}%)`);
+    });
+}
+
+// Kick off loading on page load
+startLoading();
+
+// Controls: dùng giá trị mặc định cho mỗi lần tải trang
+// (không lưu vào localStorage để mỗi lần mở lại sẽ reset về WASD + Space)
+
+====================
+FILE: Map.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\js\Map.js
+====================
+// js/Map.js - Phiên bản ĐẦY ĐỦ (Dùng ảnh nền + ảnh tường)
+
+class GameMap {
+    constructor(mapWidth, mapHeight, tileSize) {
+        this.width = mapWidth;
+        this.height = mapHeight;
+        this.tileSize = tileSize;
+        this.walls = []; // Sẽ được server điền dữ liệu vào sau
+        // Đã xóa this.generateMap() vì map do server tạo
+    }
+
+    // --- HÀM VẼ MỚI (DÙNG ẢNH) ---
+
+    // 1. Vẽ nền đất (Lát gạch background)
+    drawBackground(ctx) {
+        // Kiểm tra xem ảnh đã tải xong chưa (biến IMAGES bên main.js)
+        if (typeof IMAGES !== 'undefined' && IMAGES.bg) {
+            // Tạo mẫu pattern từ ảnh để lặp lại (giống lát gạch sàn nhà)
+            const pattern = ctx.createPattern(IMAGES.bg, 'repeat');
+            ctx.fillStyle = pattern;
+            ctx.fillRect(0, 0, this.width, this.height);
+        } else {
+            // Dự phòng: Nếu chưa có ảnh thì vẽ màu xám
+            ctx.fillStyle = "#555";
+            ctx.fillRect(0, 0, this.width, this.height);
+        }
+    }
+}
+
+====================
+FILE: Particle.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\js\Particle.js
+====================
+class Particle {
+    constructor(x, y, vx, vy, color, life, size) {
+        this.x = x;
+        this.y = y;
+        this.vx = vx; // Tốc độ X
+        this.vy = vy; // Tốc độ Y
+        this.color = color;
+        this.life = life; // Thời gian sống (frames)
+        this.maxLife = life;
+        this.size = size || 3; // Kích thước hạt
+        this.opacity = 1; // Độ trong suốt
+    }
+
+    update() {
+        this.x += this.vx;
+        this.y += this.vy;
+        this.life--;
+        this.opacity = this.life / this.maxLife; // Giảm dần opacity
+        // Có thể thêm lực hấp dẫn hoặc giảm tốc độ nếu muốn
+        this.vx *= 0.98; // Giảm tốc độ dần
+        this.vy *= 0.98;
+    }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.globalAlpha = this.opacity;
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+
+    isDead() {
+        return this.life <= 0;
+    }
+}
+
+class ParticleSystem {
+    constructor() {
+        this.particles = [];
+        this.maxParticles = 50; // Giới hạn 50 particles để tối ưu
+    }
+
+    addParticle(x, y, vx, vy, color, life, size) {
+        if (this.particles.length < this.maxParticles) {
+            this.particles.push(new Particle(x, y, vx, vy, color, life, size));
+        }
+    }
+
+    // Tạo hiệu ứng nổ (nhiều hạt bay ra ngẫu nhiên)
+    createExplosion(x, y, count = 5, color = 'orange', life = 30, speed = 2) {
+        for (let i = 0; i < count; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const vx = Math.cos(angle) * speed * (Math.random() * 0.5 + 0.5);
+            const vy = Math.sin(angle) * speed * (Math.random() * 0.5 + 0.5);
+            this.addParticle(x, y, vx, vy, color, life, Math.random() * 3 + 1);
+        }
+    }
+
+    // Tạo hiệu ứng bụi (ít hạt hơn, màu nâu)
+    createDust(x, y, count = 2, color = '#8B4513', life = 20, speed = 1) {
+        for (let i = 0; i < count; i++) {
+            const vx = (Math.random() - 0.5) * speed;
+            const vy = (Math.random() - 0.5) * speed - 0.5; // Bay lên một chút
+            this.addParticle(x, y, vx, vy, color, life, Math.random() * 2 + 1);
+        }
+    }
+
+    update() {
+        this.particles = this.particles.filter(p => {
+            p.update();
+            return !p.isDead();
+        });
+    }
+
+    draw(ctx) {
+        this.particles.forEach(p => p.draw(ctx));
+    }
+}
+
+====================
+FILE: Renderer.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\js\Renderer.js
+====================
+// Renderer.js - Hàm vẽ
+function renderPlayerScreen(ctx, canvas, targetTank, gameMap, bullets, tank1, tank2, items, particleSystem, playerData) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+
+    // Camera theo targetTank
+    let camX = targetTank.x - canvas.width / 2 + targetTank.width / 2;
+    let camY = targetTank.y - canvas.height / 2 + targetTank.height / 2;
+    camX = Math.max(0, Math.min(camX, gameMap.width - canvas.width));
+    camY = Math.max(0, Math.min(camY, gameMap.height - canvas.height));
+    ctx.translate(-camX, -camY);
+
+    // Vẽ nền đất
+    gameMap.drawBackground(ctx);
+    
+    // Vẽ Tường (tối ưu: dùng forEach thay vì filter để tránh tạo mảng mới)
+    // Chỉ vẽ tường nằm trong viewport
+    gameMap.walls.forEach(wall => {
+        // Check visibility trực tiếp trong vòng lặp (nhanh hơn .filter)
+        if (wall.x < camX + canvas.width && wall.x + wall.width > camX && 
+            wall.y < camY + canvas.height && wall.y + wall.height > camY) {
+            if (IMAGES.wall) {
+                ctx.drawImage(IMAGES.wall, wall.x, wall.y, wall.width, wall.height);
+            } else {
+                ctx.fillStyle = "#8B4513";
+                ctx.fillRect(wall.x, wall.y, wall.width, wall.height);
+                ctx.strokeStyle = "black";
+                ctx.strokeRect(wall.x, wall.y, wall.width, wall.height);
+            }
+        }
+    });
+    
+    // Vẽ bullets - Chỉ vẽ trong viewport (tối ưu culling)
+    bullets.forEach(b => {
+        if (b.x > camX - 20 && b.x < camX + canvas.width + 20 &&
+            b.y > camY - 20 && b.y < camY + canvas.height + 20) {
+            b.draw(ctx); // Gọi method draw() của Bullet instance
+        }
+    });
+    if (tank1) tank1.draw(ctx);
+    if (tank2) tank2.draw(ctx);
+
+    // Vẽ viền map
+    ctx.strokeStyle = "yellow"; ctx.lineWidth = 5;
+    ctx.strokeRect(0, 0, gameMap.width, gameMap.height);
+    
+    // Vẽ items (tối ưu: dùng forEach thay vì filter)
+    items.forEach(item => {
+        // Check visibility trực tiếp (item có width/height = 30)
+        if (item.x < camX + canvas.width && item.x + 30 > camX && 
+            item.y < camY + canvas.height && item.y + 30 > camY) {
+            Item.drawRaw(ctx, item);
+        }
+    });
+
+    // Vẽ particles
+    particleSystem.draw(ctx);
+
+    ctx.restore(); 
+
+    // HUD - HP
+    ctx.fillStyle = "black"; ctx.fillRect(10, 10, 104, 24); 
+    let hpPercent = targetTank ? Math.max(0, targetTank.health / targetTank.maxHealth) : 0;
+    ctx.fillStyle = hpPercent < 0.3 ? "red" : "#00ff00"; 
+    ctx.fillRect(12, 12, 100 * hpPercent, 20);
+    ctx.fillStyle = "white"; ctx.font = "bold 12px Arial";
+    ctx.fillText(`HP: ${targetTank ? targetTank.health : 0}`, 120, 27);
+    
+    // Debug info - bullet & particle count
+    ctx.fillStyle = "white"; ctx.font = "12px Arial";
+    ctx.fillText(`Bullets: ${bullets.length}`, 10, 60);
+    ctx.fillText(`Particles: ${particleSystem ? particleSystem.particles.length : 0}`, 10, 80);
+
+    // Buff timers (bên góc trái)
+    if (playerData && playerData.buffTimers) {
+        const timers = playerData.buffTimers;
+        const entries = [
+            { key: 'speed', label: 'Tốc độ' },
+            { key: 'shield', label: 'Giáp' },
+            { key: 'damage', label: 'Sát thương' },
+            { key: 'piercing', label: 'Xuyên tường' },
+            { key: 'explosive', label: 'Đạn nổ' }
+        ];
+        let line = 0;
+        ctx.font = "12px Arial";
+        entries.forEach(entry => {
+            const val = timers[entry.key];
+            if (val && val > 0) {
+                const sec = Math.ceil(val / 60);
+                ctx.fillStyle = "white";
+                ctx.fillText(`${entry.label}: ${sec}s`, 10, 100 + line * 16);
+                line++;
+            }
+        });
+    }
+}
+
+// Global
+window.renderPlayerScreen = renderPlayerScreen;
+
+====================
+FILE: Tank.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\js\Tank.js
+====================
+class Tank {
+    constructor(x, y, imageKey, id) {
+        this.id = id;
+        this.x = x;
+        this.y = y;
+        this.width = SharedConstants.TANK_WIDTH;
+        this.height = SharedConstants.TANK_HEIGHT;
+        
+        // Interpolation (Lerp) cho chuyển động mượt mà
+        this.targetX = x; // Vị trí đích từ server
+        this.targetY = y;
+        this.lerpFactor = SharedConstants.LERP_FACTOR; // Tốc độ lerp từ SharedConstants
+        
+        this.image = IMAGES[imageKey]; 
+        
+        this.maxHealth = SharedConstants.PLAYER_MAX_HEALTH;
+        this.health = SharedConstants.PLAYER_MAX_HEALTH;
+        this.shield = SharedConstants.PLAYER_BASE_SHIELD;
+        this.damage = SharedConstants.PLAYER_BASE_DAMAGE;
+        this.bulletType = 1;
+        
+        this.lastDx = 0; 
+        this.lastDy = -1;
+
+        this.keys = { up: false, down: false, left: false, right: false, shoot: false };
+        this.canShoot = true;
+        this.controlsSetup = false; // Flag để chỉ setup 1 lần
+        
+        // Input throttling để tránh spam socket.emit cho movement
+        this.lastInputSendTime = 0;
+        this.inputSendInterval = 1000 / SharedConstants.INPUT_THROTTLE_RATE; // ms từ SharedConstants
+        
+        // Movement priority: Track thứ tự phím nhấn để xử lý multi-key input tốt hơn
+        this.movementPriority = []; // Array chứa các phím movement đang được nhấn theo thứ tự
+        this.lastSentPriority = []; // Track priority đã gửi lên server
+        
+        // === CLIENT-SIDE PREDICTION ===
+        // Vị trí predicted (client tự tính, không chờ server)
+        this.predictedX = x;
+        this.predictedY = y;
+        
+        // Vị trí cuối cùng nhận từ server (để reconcile)
+        this.lastServerX = x;
+        this.lastServerY = y;
+        
+        // Queue input chưa được reconcile từ server
+        this.pendingInputs = []; // [{dx, dy, timestamp, seq}, ...]
+        this.inputSequenceNumber = 0; // Sequence number cho mỗi input
+        
+        // Threshold để detect lệch quá xa (reconciliation)
+        this.reconciliationThreshold = SharedConstants.SNAP_THRESHOLD; // Dùng lại SNAP_THRESHOLD
+    }
+
+    resetInput() {
+        this.keys = { up: false, down: false, left: false, right: false, shoot: false };
+        this.canShoot = true;
+    }
+
+  setupControls() {
+    // Chỉ setup 1 lần, tránh lặp listeners
+    if (this.controlsSetup) return;
+    this.controlsSetup = true;
+    
+    // Lấy controls từ settings của session hiện tại hoặc dùng mặc định
+    const controls = window.controlsP1 || { up: 'w', down: 's', left: 'a', right: 'd', shoot: ' ' };
+    
+    window.addEventListener('keydown', (e) => {
+        const oldKeys = JSON.stringify(this.keys);
+        const wasShoot = this.keys.shoot;
+        
+        // Movement keys với priority tracking
+        if (e.key === controls.up && !this.keys.up) {
+            this.keys.up = true;
+            // Xóa 'up' khỏi array nếu có (tránh duplicate), rồi thêm vào cuối
+            this.movementPriority = this.movementPriority.filter(k => k !== 'up');
+            this.movementPriority.push('up');
+        }
+        if (e.key === controls.down && !this.keys.down) {
+            this.keys.down = true;
+            this.movementPriority = this.movementPriority.filter(k => k !== 'down');
+            this.movementPriority.push('down');
+        }
+        if (e.key === controls.left && !this.keys.left) {
+            this.keys.left = true;
+            this.movementPriority = this.movementPriority.filter(k => k !== 'left');
+            this.movementPriority.push('left');
+        }
+        if (e.key === controls.right && !this.keys.right) {
+            this.keys.right = true;
+            this.movementPriority = this.movementPriority.filter(k => k !== 'right');
+            this.movementPriority.push('right');
+        }
+        
+        if (e.key === controls.shoot) {
+            this.keys.shoot = true;
+            // === AUDIO OVERLAPPING ===
+            // allowOverlap = true để cho tiếng súng chồng lên nhau (clone method)
+            if (!wasShoot && window.audioManager) window.audioManager.playSound('shoot', false, true);
+        }
+        
+        const now = Date.now();
+        const priorityChanged = JSON.stringify(this.movementPriority) !== JSON.stringify(this.lastSentPriority || []);
+        
+        if ((JSON.stringify(this.keys) !== oldKeys || priorityChanged) && window.socket) {
+            // === CLIENT-SIDE PREDICTION: Apply movement ngay ===
+            // Nếu có thay đổi movement priority, predict + apply ngay
+            if (priorityChanged) {
+                const { dx, dy } = this.predictMovement(this.movementPriority);
+                if (dx !== 0 || dy !== 0) {
+                    this.applyPredictedMovement(dx, dy, SharedConstants.TANK_BASE_SPEED);
+                    this.lastDx = dx;
+                    this.lastDy = dy;
+                }
+            }
+            
+            // Gửi keys kèm priority array
+            const input = { ...this.keys, priority: this.movementPriority };
+            
+            // Shoot key hoặc priority thay đổi: gửi ngay lập tức
+            if (e.key === controls.shoot || priorityChanged) {
+                window.socket.emit('playerInput', { roomId: window.roomId || 'default', input });
+                this.lastInputSendTime = now;
+                this.lastSentPriority = [...this.movementPriority]; // Lưu priority đã gửi
+            }
+            // Movement keys khác: throttle 33ms
+            else if (now - this.lastInputSendTime >= this.inputSendInterval) {
+                window.socket.emit('playerInput', { roomId: window.roomId || 'default', input });
+                this.lastInputSendTime = now;
+                this.lastSentPriority = [...this.movementPriority];
+            }
+        }
+    });
+    window.addEventListener('keyup', (e) => {
+        const oldKeys = JSON.stringify(this.keys);
+        
+        // Movement keys với priority tracking
+        if (e.key === controls.up) {
+            this.keys.up = false;
+            this.movementPriority = this.movementPriority.filter(k => k !== 'up');
+        }
+        if (e.key === controls.down) {
+            this.keys.down = false;
+            this.movementPriority = this.movementPriority.filter(k => k !== 'down');
+        }
+        if (e.key === controls.left) {
+            this.keys.left = false;
+            this.movementPriority = this.movementPriority.filter(k => k !== 'left');
+        }
+        if (e.key === controls.right) {
+            this.keys.right = false;
+            this.movementPriority = this.movementPriority.filter(k => k !== 'right');
+        }
+        
+        if (e.key === controls.shoot) {
+            this.keys.shoot = false;
+            this.canShoot = true;
+        }
+        
+        const now = Date.now();
+        const priorityChanged = JSON.stringify(this.movementPriority) !== JSON.stringify(this.lastSentPriority || []);
+        
+        if ((JSON.stringify(this.keys) !== oldKeys || priorityChanged) && window.socket) {
+            // === CLIENT-SIDE PREDICTION: Apply movement ngay khi nhả phím ===
+            if (priorityChanged) {
+                const { dx, dy } = this.predictMovement(this.movementPriority);
+                if (dx !== 0 || dy !== 0) {
+                    this.applyPredictedMovement(dx, dy, SharedConstants.TANK_BASE_SPEED);
+                    this.lastDx = dx;
+                    this.lastDy = dy;
+                } else {
+                    // Nếu không có phím di chuyển nữa, giữ hướng cuối
+                    // (lastDx, lastDy vẫn là hướng trước đó)
+                }
+            }
+            
+            // Gửi keys kèm priority array
+            const input = { ...this.keys, priority: this.movementPriority };
+            
+            // Shoot key release hoặc priority thay đổi: gửi ngay
+            if (e.key === controls.shoot || priorityChanged) {
+                window.socket.emit('playerInput', { roomId: window.roomId || 'default', input });
+                this.lastInputSendTime = now;
+                this.lastSentPriority = [...this.movementPriority];
+            }
+            // Movement keys khác: throttle 33ms
+            else if (now - this.lastInputSendTime >= this.inputSendInterval) {
+                window.socket.emit('playerInput', { roomId: window.roomId || 'default', input });
+                this.lastInputSendTime = now;
+                this.lastSentPriority = [...this.movementPriority];
+            }
+        }
+    });
+  }
+
+    // Update from server data
+    updateFromData(data) {
+        // Thay vì gán cứng tọa độ (this.x = data.x), ta lưu vào targetX/targetY
+        // Sau đó trong update() sẽ lerp từ vị trí hiện tại đến target
+        this.targetX = data.x;
+        this.targetY = data.y;
+        
+        // === RECONCILIATION: Kiểm tra lệch giữa predicted và server ===
+        // Nếu predicted tương đối chính xác (lệch < threshold), keep using predicted
+        // Nếu lệch > threshold, reconcile (reset về server state + replay inputs)
+        const predictionError = SharedUtils.distance(this.predictedX, this.predictedY, data.x, data.y);
+        
+        if (predictionError > this.reconciliationThreshold) {
+            // Lệch quá xa: Reconcile
+            console.warn(`[Reconciliation] Error: ${predictionError.toFixed(1)}px, resetting...`);
+            
+            // Reset về server state
+            this.predictedX = data.x;
+            this.predictedY = data.y;
+            this.lastServerX = data.x;
+            this.lastServerY = data.y;
+            
+            // Xóa pending inputs vì server đã process rồi
+            this.pendingInputs = [];
+        } else {
+            // Lệch nhỏ: Keep using predicted, chỉ update lastServerX/Y để reference
+            this.lastServerX = data.x;
+            this.lastServerY = data.y;
+        }
+        
+        // Các thuộc tính khác vẫn cập nhật ngay lập tức
+        this.health = data.health;
+        this.shield = data.shield;
+        this.damage = data.damage;
+        this.bulletType = data.bulletType;
+        this.lastDx = data.lastDx;
+        this.lastDy = data.lastDy;
+    }
+    
+    // === CLIENT-SIDE PREDICTION ===
+    // Hàm này được gọi trong setupControls để predict movement
+    predictMovement(priority) {
+        let dx = 0, dy = 0;
+        
+        // Xử lý priority thứ tự phím (từ mới nhất)
+        if (priority.length > 0) {
+            let verticalSet = false;
+            let horizontalSet = false;
+            
+            for (let i = priority.length - 1; i >= 0; i--) {
+                const key = priority[i];
+                
+                if (!verticalSet) {
+                    if (key === 'up') { dy = -1; verticalSet = true; }
+                    else if (key === 'down') { dy = 1; verticalSet = true; }
+                }
+                
+                if (!horizontalSet) {
+                    if (key === 'left') { dx = -1; horizontalSet = true; }
+                    else if (key === 'right') { dx = 1; horizontalSet = true; }
+                }
+                
+                if (verticalSet && horizontalSet) break;
+            }
+        }
+        
+        return { dx, dy };
+    }
+    
+    // Apply predicted movement ngay lập tức
+    applyPredictedMovement(dx, dy, speed = SharedConstants.TANK_BASE_SPEED) {
+        if (dx === 0 && dy === 0) return;
+        
+        // Nếu gameMap chưa khởi tạo, tạm thời bỏ qua collision check
+        if (typeof gameMap === 'undefined') {
+            this.predictedX += dx * speed;
+            this.predictedY += dy * speed;
+            return;
+        }
+        
+        // Tính vị trí mới
+        let newX = this.predictedX + dx * speed;
+        let newY = this.predictedY + dy * speed;
+        
+        // Boundary check
+        newX = Math.max(0, Math.min(newX, gameMap.width - this.width));
+        newY = Math.max(0, Math.min(newY, gameMap.height - this.height));
+        
+        // Collision check với tường
+        const testHitbox = {
+            x: newX + SharedConstants.TANK_HITBOX_PADDING,
+            y: newY + SharedConstants.TANK_HITBOX_PADDING,
+            width: this.width - SharedConstants.TANK_HITBOX_PADDING * 2,
+            height: this.height - SharedConstants.TANK_HITBOX_PADDING * 2
+        };
+        
+        // Kiểm tra va chạm với tường gần đó
+        const nearbyWalls = gameMap.walls ? gameMap.walls.filter(wall => 
+            Math.abs(wall.x - newX) < 150 && Math.abs(wall.y - newY) < 150
+        ) : [];
+        
+        let hasCollision = false;
+        for (let wall of nearbyWalls) {
+            if (SharedUtils.isColliding(testHitbox, wall)) {
+                hasCollision = true;
+                break;
+            }
+        }
+        
+        // Nếu không va chạm, update predicted position
+        if (!hasCollision) {
+            this.predictedX = newX;
+            this.predictedY = newY;
+        }
+        
+        // Lưu input vào pending queue để reconcile sau
+        this.pendingInputs.push({
+            seq: this.inputSequenceNumber++,
+            dx: dx,
+            dy: dy,
+            speed: speed,
+            timestamp: Date.now()
+        });
+    }
+
+    // Hàm lerp để interpolate vị trí mỗi frame với Snap Logic
+    update() {
+        // === CONTINUOUS CLIENT-SIDE PREDICTION (Mỗi Frame) ===
+        // Nếu có phím di chuyển được nhấn, predict liên tục
+        const { dx, dy } = this.predictMovement(this.movementPriority);
+        if (dx !== 0 || dy !== 0) {
+            this.applyPredictedMovement(dx, dy, SharedConstants.TANK_BASE_SPEED);
+            this.lastDx = dx;
+            this.lastDy = dy;
+        }
+        
+        // === DISPLAY: Dùng PREDICTED position thay vì SERVER position ===
+        // Điều này làm xe di chuyển ngay lập tức theo client prediction
+        // this.x và this.y là position dùng để vẽ
+        
+        // Lerp giữa predicted position và target position (từ server)
+        // Nếu predicted khá chính xác thì lerp sẽ rất nhỏ
+        const distanceToTarget = SharedUtils.distance(this.predictedX, this.predictedY, this.targetX, this.targetY);
+        
+        if (distanceToTarget > this.reconciliationThreshold) {
+            // Lệch quá xa: Snap cứng
+            this.predictedX = this.targetX;
+            this.predictedY = this.targetY;
+        } else {
+            // Lệch nhỏ: Lerp mượt mà
+            this.predictedX += (this.targetX - this.predictedX) * this.lerpFactor;
+            this.predictedY += (this.targetY - this.predictedY) * this.lerpFactor;
+            
+            if (Math.abs(this.targetX - this.predictedX) < 0.5) this.predictedX = this.targetX;
+            if (Math.abs(this.targetY - this.predictedY) < 0.5) this.predictedY = this.targetY;
+        }
+        
+        // Gán predicted position vào display position
+        this.x = this.predictedX;
+        this.y = this.predictedY;
+    }
+
+    draw(ctx) {
+        // Tính toán góc quay (Angle)
+        // Math.atan2 trả về góc tính bằng radian
+        let angle = Math.atan2(this.lastDy, this.lastDx);
+        
+        // Điều chỉnh góc: Vì ảnh mặc định hướng lên (UP), 
+        // nhưng atan2 tính góc 0 là bên phải (RIGHT).
+        // Ta cần cộng thêm 90 độ (PI/2) để khớp.
+        angle += Math.PI / 2;
+
+        ctx.save();
+        
+        // Dịch chuyển gốc tọa độ về TÂM của xe tăng
+        ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+        
+        // Xoay
+        ctx.rotate(angle);
+
+        // Vẽ ảnh (Lùi về -width/2, -height/2 để vẽ đúng tâm)
+        if (this.image) {
+            ctx.drawImage(this.image, -this.width / 2, -this.height / 2, this.width, this.height);
+        } else {
+            // Dự phòng nếu ảnh lỗi thì vẽ hình vuông
+            ctx.fillStyle = this.id === "p1" ? "red" : "blue";
+            ctx.fillRect(-this.width/2, -this.height/2, this.width, this.height);
+        }
+
+        ctx.restore();
+    }
+}
+
+====================
+FILE: UIManager.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\js\UIManager.js
+====================
+// UIManager.js - Quản lý UI và menu
+
+function initUI() {
+    const lobbyLayer = document.getElementById('lobby-layer');
+    const settingsLayer = document.getElementById('settings-layer');
+    const gameOverLayer = document.getElementById('game-over-layer');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+    const backToLobbyBtn = document.getElementById('backToLobbyBtn');
+    const restartBtn = document.getElementById('restartBtn');
+    const homeBtn = document.getElementById('homeBtn');
+
+    // Load controls cho session hiện tại (không dùng localStorage)
+    loadControls();
+
+    // NÚT MỞ SETTINGS
+    settingsBtn.addEventListener('click', () => {
+        lobbyLayer.style.display = 'none';
+        settingsLayer.style.display = 'flex';
+    });
+
+    // NÚT LƯU CÀI ĐẶT
+    saveSettingsBtn.addEventListener('click', () => {
+        saveControls();
+        alert('Đã lưu cài đặt phím!');
+        settingsLayer.style.display = 'none';
+        lobbyLayer.style.display = 'flex';
+    });
+
+    // NÚT QUAY LẠI TỪ SETTINGS
+    backToLobbyBtn.addEventListener('click', () => {
+        settingsLayer.style.display = 'none';
+        lobbyLayer.style.display = 'flex';
+    });
+
+    // NÚT CHƠI LẠI: Disconnect và quay về lobby
+    restartBtn.addEventListener('click', () => {
+        gameOverLayer.style.display = 'none';
+        // Disconnect khỏi room hiện tại
+        if (window.socket) {
+            window.socket.emit('leaveGame');
+        }
+        // Reload trang để quay về lobby
+        location.reload();
+    });
+
+    // NÚT MÀN HÌNH CHÍNH: Quay về lobby
+    homeBtn.addEventListener('click', () => {
+        gameOverLayer.style.display = 'none';
+        if (window.socket) {
+            window.socket.emit('leaveGame');
+        }
+        location.reload();
+    });
+}
+
+// Hàm load controls cho session hiện tại (reset về mặc định khi reload)
+function loadControls() {
+    const controls = window.controlsP1 || { up: 'w', down: 's', left: 'a', right: 'd', shoot: ' ' };
+    document.getElementById('control-up').value = controls.up;
+    document.getElementById('control-down').value = controls.down;
+    document.getElementById('control-left').value = controls.left;
+    document.getElementById('control-right').value = controls.right;
+    document.getElementById('control-shoot').value = controls.shoot;
+    window.controlsP1 = controls; // giữ trong RAM cho tới khi refresh
+}
+
+// Hàm save controls cho session hiện tại (không lưu localStorage)
+function saveControls() {
+    const controls = {
+        up: document.getElementById('control-up').value,
+        down: document.getElementById('control-down').value,
+        left: document.getElementById('control-left').value,
+        right: document.getElementById('control-right').value,
+        shoot: document.getElementById('control-shoot').value
+    };
+    window.controlsP1 = controls;
+}
+
+// Global
+window.initUI = initUI;
+window.loadControls = loadControls;
+window.saveControls = saveControls;
+
+====================
+FILE: Utils.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\js\Utils.js
+====================
+// Utils.js - Các hàm tiện ích
+// File này hiện tại sử dụng SharedUtils.js để có các hàm utility chung với server
+// Điều này đảm bảo logic nhất quán giữa client và server (Client-side Prediction)
+
+// SharedUtils đã được load qua index.html, có thể truy cập qua window.SharedUtils
+
+====================
+FILE: server.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\server\server.js
+====================
+const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
+const path = require('path');
+
+// Import shared constants and utils
+const SharedConstants = require('../shared/SharedConstants.js');
+const SharedUtils = require('../shared/SharedUtils.js');
+
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: { origin: "*" },
+  pingInterval: 10000,    // Ping every 10s
+  pingTimeout: 30000,     // Wait 30s for pong before disconnect
+  maxHttpBufferSize: 1e6  // 1MB buffer
+});
+
+const PORT = 3000;
+
+// Serve static files (client)
+app.use(express.static(path.join(__dirname, '..')));
+
+// Game state per room
+let games = new Map(); // roomId -> game state
+
+// Copy map generation from Map.js (simplified)
+function generateMap() {
+  const walls = [];
+  const mapWidth = SharedConstants.MAP_WIDTH;
+  const mapHeight = SharedConstants.MAP_HEIGHT;
+  const tileSize = SharedConstants.TILE_SIZE;
+  const chunkSize = SharedConstants.CHUNK_SIZE; // Chunk 200x200 to reduce collision checks
+  const cols = mapWidth / tileSize;
+  const rows = mapHeight / tileSize;
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      let isBorder = (row === 0 || row === rows - 1 || col === 0 || col === cols - 1);
+      let isObstacle = Math.random() < SharedConstants.MAP_OBSTACLE_DENSITY;
+      let safeZoneP1 = (col < SharedConstants.MAP_SAFE_ZONE_SIZE && row < SharedConstants.MAP_SAFE_ZONE_SIZE);
+      let safeZoneP2 = (col > cols - (SharedConstants.MAP_SAFE_ZONE_SIZE + 1) && row > rows - (SharedConstants.MAP_SAFE_ZONE_SIZE + 1));
+
+      if (isBorder || (isObstacle && !safeZoneP1 && !safeZoneP2)) {
+        walls.push({
+          x: col * tileSize,
+          y: row * tileSize,
+          width: tileSize,
+          height: tileSize
+        });
+      }
+    }
+  }
+  const map = { width: mapWidth, height: mapHeight, walls, tileSize, chunkSize };
+  buildWallChunks(map);
+  return map;
+}
+
+// Build a chunk index for walls to speed up collision checks
+function buildWallChunks(map) {
+  const chunks = new Map();
+  const getKey = (cx, cy) => `${cx},${cy}`;
+  const toChunk = (x, y) => ({ cx: Math.floor(x / map.chunkSize), cy: Math.floor(y / map.chunkSize) });
+  for (let wall of map.walls) {
+    const { cx, cy } = toChunk(wall.x, wall.y);
+    const key = getKey(cx, cy);
+    if (!chunks.has(key)) chunks.set(key, []);
+    chunks.get(key).push(wall);
+  }
+  map.wallChunks = chunks;
+}
+
+// Get walls near a rectangle using chunk index
+function getWallsNear(map, rect) {
+  const pad = 10;
+  const startCx = Math.floor(Math.max(0, rect.x - pad) / map.chunkSize);
+  const endCx = Math.floor(Math.min(map.width, rect.x + rect.width + pad) / map.chunkSize);
+  const startCy = Math.floor(Math.max(0, rect.y - pad) / map.chunkSize);
+  const endCy = Math.floor(Math.min(map.height, rect.y + rect.height + pad) / map.chunkSize);
+  const walls = [];
+  for (let cy = startCy; cy <= endCy; cy++) {
+    for (let cx = startCx; cx <= endCx; cx++) {
+      const key = `${cx},${cy}`;
+      const arr = map.wallChunks.get(key);
+      if (arr) walls.push(...arr);
+    }
+  }
+  return walls;
+}
+
+// Item spawning logic (simplified)
+let itemSpawnTimer = 0;
+function spawnItems(game) {
+  itemSpawnTimer++;
+  if (itemSpawnTimer >= SharedConstants.ITEM_SPAWN_INTERVAL) { // Spawn every 2 seconds (120 frames at 60fps)
+    itemSpawnTimer = 0;
+    // Count current items (6 types)
+    let count = [0, 0, 0, 0, 0, 0];
+    game.items.forEach(item => count[item.type - 1]++);
+
+    const itemTargets = [
+      SharedConstants.ITEM_TARGETS.HEALTH,
+      SharedConstants.ITEM_TARGETS.SPEED,
+      SharedConstants.ITEM_TARGETS.SHIELD,
+      SharedConstants.ITEM_TARGETS.DAMAGE,
+      SharedConstants.ITEM_TARGETS.PIERCING,
+      SharedConstants.ITEM_TARGETS.EXPLOSIVE
+    ];
+    let totalMissing = 0;
+    for (let i = 0; i < 6; i++) {
+      totalMissing += Math.max(0, itemTargets[i] - count[i]);
+    }
+    if (totalMissing === 0) return;
+
+    let spawnCount = Math.min(3, totalMissing);
+    for (let i = 0; i < spawnCount; i++) {
+      let selectedType = -1;
+      let maxMissing = 0;
+      for (let j = 0; j < 6; j++) {
+        let missing = itemTargets[j] - count[j];
+        if (missing > maxMissing) {
+          maxMissing = missing;
+          selectedType = j + 1;
+        }
+      }
+      if (selectedType === -1) break;
+      count[selectedType - 1]++;
+
+      let x, y, attempts = 0;
+      do {
+        x = Math.random() * game.map.width;
+        y = Math.random() * game.map.height;
+        attempts++;
+      } while (attempts < 20 && game.map.walls.some(wall => 
+        SharedUtils.isColliding({x, y, width: SharedConstants.ITEM_SIZE, height: SharedConstants.ITEM_SIZE}, wall)
+      ));
+
+      if (attempts < 20) {
+        game.items.push({ x, y, type: selectedType });
+      }
+    }
+  }
+}
+
+io.on('connection', (socket) => {
+  console.log('Client connected:', socket.id);
+
+  // Tạo phòng mới
+  socket.on('createRoom', (data) => {
+    const { roomId } = data;
+    if (games.has(roomId)) {
+      socket.emit('roomNotFound');
+      return;
+    }
+    
+    socket.join(roomId);
+    games.set(roomId, {
+      players: {},
+      bullets: [],
+      items: [],
+      map: generateMap(),
+      isGameOver: false,
+      winner: null,
+      bulletSeq: 1,
+      hostId: socket.id, // Lưu host
+      isPlaying: false // Trạng thái game
+    });
+    
+    const game = games.get(roomId);
+    const isP1 = true;
+    game.players[socket.id] = {
+      id: 'p1',
+      x: SharedConstants.PLAYER_P1_SPAWN.x,
+      y: SharedConstants.PLAYER_P1_SPAWN.y,
+      width: SharedConstants.TANK_WIDTH,
+      height: SharedConstants.TANK_HEIGHT,
+      speed: SharedConstants.TANK_BASE_SPEED,
+      health: SharedConstants.PLAYER_MAX_HEALTH,
+      maxHealth: SharedConstants.PLAYER_MAX_HEALTH,
+      shield: SharedConstants.PLAYER_BASE_SHIELD,
+      damage: SharedConstants.PLAYER_BASE_DAMAGE,
+      bulletType: 1,
+      lastDx: 0,
+      lastDy: -1,
+      angle: 0,
+      keys: { up: false, down: false, left: false, right: false, shoot: false },
+      canShoot: true,
+      lastShootTime: 0,
+      shootCooldown: SharedConstants.SHOOT_COOLDOWN,
+      defaultSpeed: SharedConstants.TANK_BASE_SPEED,
+      defaultDamage: SharedConstants.PLAYER_BASE_DAMAGE,
+      defaultBulletType: 1,
+      buffTimers: {
+        speed: 0,
+        shield: 0,
+        damage: 0,
+        piercing: 0,
+        explosive: 0
+      }
+    };
+    
+    socket.emit('roomCreated', { roomId, playerId: socket.id, isP1: true });
+    console.log(`Room created: ${roomId} by ${socket.id}`);
+  });
+
+  // Tham gia phòng (tự động khi có người thứ 2 connect)
+  socket.on('joinRoom', (data) => {
+    const { roomId } = data;
+    console.log(`Player ${socket.id} attempting to join room: ${roomId}`);
+    console.log('Available rooms:', Array.from(games.keys()));
+    const game = games.get(roomId);
+    
+    if (!game) {
+      console.log(`Room ${roomId} not found!`);
+      socket.emit('roomNotFound');
+      return;
+    }
+    
+    const playerIds = Object.keys(game.players);
+    if (playerIds.length >= 2) {
+      socket.emit('roomFull');
+      return;
+    }
+    
+    socket.join(roomId);
+    const isP1 = false;
+    game.players[socket.id] = {
+      id: 'p2',
+      x: game.map.width - SharedConstants.PLAYER_P2_SPAWN_OFFSET.x,
+      y: game.map.height - SharedConstants.PLAYER_P2_SPAWN_OFFSET.y,
+      width: SharedConstants.TANK_WIDTH,
+      height: SharedConstants.TANK_HEIGHT,
+      speed: SharedConstants.TANK_BASE_SPEED,
+      health: SharedConstants.PLAYER_MAX_HEALTH,
+      maxHealth: SharedConstants.PLAYER_MAX_HEALTH,
+      shield: SharedConstants.PLAYER_BASE_SHIELD,
+      damage: SharedConstants.PLAYER_BASE_DAMAGE,
+      bulletType: 1,
+      lastDx: 0,
+      lastDy: -1,
+      angle: 0,
+      keys: { up: false, down: false, left: false, right: false, shoot: false },
+      canShoot: true,
+      lastShootTime: 0,
+      shootCooldown: SharedConstants.SHOOT_COOLDOWN,
+      defaultSpeed: SharedConstants.TANK_BASE_SPEED,
+      defaultDamage: SharedConstants.PLAYER_BASE_DAMAGE,
+      defaultBulletType: 1,
+      buffTimers: {
+        speed: 0,
+        shield: 0,
+        damage: 0,
+        piercing: 0,
+        explosive: 0
+      }
+    };
+    
+    socket.emit('joined', { playerId: socket.id, isP1: false });
+    socket.emit('joinedRoom', { playerId: socket.id, isP1: false, playerCount: Object.keys(game.players).length });
+    io.to(roomId).emit('playerJoined', { playerCount: Object.keys(game.players).length });
+    console.log(`Player joined room: ${roomId}`);
+  });
+
+  // Bắt đầu game (chỉ host mới được)
+  socket.on('startGame', (data) => {
+    const { roomId } = data;
+    const game = games.get(roomId);
+    
+    if (!game || game.hostId !== socket.id) {
+      return; // Không phải host
+    }
+    
+    if (Object.keys(game.players).length < 2) {
+      return; // Chưa đủ người
+    }
+    
+    game.isPlaying = true;
+    io.to(roomId).emit('gameStarted');
+    io.to(roomId).emit('gameState', game);
+    console.log(`Game started in room: ${roomId}`);
+  });
+
+  // Rời phòng
+  socket.on('leaveRoom', (data) => {
+    const { roomId } = data;
+    const game = games.get(roomId);
+    if (game) {
+      delete game.players[socket.id];
+      socket.leave(roomId);
+      
+      // Nếu phòng rỗng hoặc host rời thì xóa phòng
+      if (Object.keys(game.players).length === 0 || game.hostId === socket.id) {
+        games.delete(roomId);
+        console.log(`Room deleted: ${roomId}`);
+      }
+    }
+  });
+
+  // Ensure player input is processed correctly for tank control
+  socket.on('playerInput', (data) => {
+    const { roomId, input } = data;
+    const game = games.get(roomId);
+    if (game && game.players[socket.id]) {
+      const player = game.players[socket.id];
+      player.keys = input;
+      if (!input.shoot) player.canShoot = true;
+    }
+  });
+
+  socket.on('disconnect', () => {
+    for (let [roomId, game] of games) {
+      delete game.players[socket.id];
+      // Cleanup room if empty
+      if (Object.keys(game.players).length === 0) {
+        console.log(`Deleted empty room: ${roomId}`);
+        games.delete(roomId);
+      }
+    }
+  });
+});
+
+// Physics loop on server (run every 16ms ~60fps)
+// Tính toán vật lý chạy ở 60fps để đảm bảo gameplay chính xác và mượt mà
+const PHYSICS_INTERVAL = 1000 / SharedConstants.PHYSICS_UPDATE_RATE;
+const physicsLoopId = setInterval(() => {
+  try {
+    for (let [roomId, game] of games) {
+      // Chỉ chạy physics khi game đang playing
+      if (!game.isPlaying || game.isGameOver) continue;
+
+      // Update players
+      for (let [id, player] of Object.entries(game.players)) {
+        let dx = 0, dy = 0;
+        
+        // === MOVEMENT PRIORITY SYSTEM (ƯU TIÊN PHÍM MỚI NHẤT) ===
+        // Hệ thống này xử lý tình huống nhấn nhiều phím cùng lúc
+        // Ưu tiên: Phím nhấn mới nhất + Xử lý xung đột (up vs down, left vs right)
+        const priority = player.keys.priority || [];
+        
+        if (priority.length > 0) {
+          // Lấy phím gần nhất từ priority array
+          // Duyệt từ cuối về đầu (phím mới nhất đến cũ nhất)
+          let verticalSet = false;
+          let horizontalSet = false;
+          
+          for (let i = priority.length - 1; i >= 0; i--) {
+            const key = priority[i];
+            
+            // Xử lý vertical (up/down) - chỉ lấy phím mới nhất
+            if (!verticalSet) {
+              if (key === 'up') { dy = -1; verticalSet = true; }
+              else if (key === 'down') { dy = 1; verticalSet = true; }
+            }
+            
+            // Xử lý horizontal (left/right) - chỉ lấy phím mới nhất
+            if (!horizontalSet) {
+              if (key === 'left') { dx = -1; horizontalSet = true; }
+              else if (key === 'right') { dx = 1; horizontalSet = true; }
+            }
+            
+            // Nếu đã có cả vertical và horizontal thì dừng
+            if (verticalSet && horizontalSet) break;
+          }
+        } else {
+          // Fallback: Nếu không có priority, dùng logic cũ
+          if (player.keys.up) dy = -1;
+          if (player.keys.down) dy = 1;
+          if (player.keys.left) dx = -1;
+          if (player.keys.right) dx = 1;
+        }
+
+        // Update last direction
+        if (dx !== 0 || dy !== 0) {
+            player.lastDx = dx;
+            player.lastDy = dy;
+        }
+
+        // Update player position
+        player.x += dx * player.speed;
+        player.y += dy * player.speed;
+
+        // Boundary check
+        player.x = Math.max(0, Math.min(player.x, game.map.width - player.width));
+        player.y = Math.max(0, Math.min(player.y, game.map.height - player.height));
+
+        // Wall collision check with reduced hitbox
+        const nearbyWalls = getWallsNear(game.map, player);
+        for (let wall of nearbyWalls) {
+          // Thu nhỏ hitbox xe tăng để đi qua khe hẹp dễ hơn (padding from SharedConstants)
+          const padding = SharedConstants.TANK_HITBOX_PADDING;
+          const playerHitbox = {
+            x: player.x + padding,
+            y: player.y + padding,
+            width: player.width - padding * 2,
+            height: player.height - padding * 2
+          };
+          if (SharedUtils.isColliding(playerHitbox, wall)) {
+            player.x -= dx * player.speed;
+            player.y -= dy * player.speed;
+            break;
+          }
+        }
+
+        // Shooting logic (với cooldown)
+        const now = Date.now();
+        if (player.keys.shoot && player.canShoot && (now - player.lastShootTime >= player.shootCooldown)) {
+            // Tính tâm xe tăng
+            const centerX = player.x + player.width / 2;
+            const centerY = player.y + player.height / 2;
+            
+            // Tính góc quay của xe tăng (giống client)
+            let angle = Math.atan2(player.lastDy, player.lastDx);
+            angle += Math.PI / 2; // Điều chỉnh vì ảnh xe tăng mặc định hướng lên
+            
+            // === CẤU HÌNH VỊ TRÍ SPAWN ĐẠN ===
+            // barrelLength: Khoảng cách từ tâm xe tăng đến đầu nòng súng (pixels)
+            const barrelLength = SharedConstants.BULLET_BARREL_LENGTH;
+            
+            // barrelOffset: Độ lệch ngang (perpendicular) so với hướng xe tăng
+            const barrelOffsetX = 0;  // Offset ngang (pixels)
+            const barrelOffsetY = 0;  // Offset dọc (pixels)
+            
+            // Tính vị trí spawn dựa trên angle và offsets
+            const spawnX = centerX + Math.cos(angle - Math.PI / 2) * barrelLength + Math.cos(angle) * barrelOffsetX;
+            const spawnY = centerY + Math.sin(angle - Math.PI / 2) * barrelLength + Math.sin(angle) * barrelOffsetY;
+            // === HẾT CẤU HÌNH ===
+            
+            game.bullets.push({
+              id: game.bulletSeq++,
+                x: spawnX,
+                y: spawnY,
+                dx: player.lastDx,
+                dy: player.lastDy,
+                speed: SharedConstants.BULLET_SPEED,
+                ownerId: player.id,
+                damage: player.damage,
+                type: player.bulletType,
+                width: SharedConstants.BULLET_WIDTH,
+                height: SharedConstants.BULLET_HEIGHT
+            });
+            player.canShoot = false;
+            player.lastShootTime = now;
+        }
+      }
+
+      // Update bullets
+      game.bullets.forEach(bullet => {
+        bullet.x += bullet.dx * bullet.speed;
+        bullet.y += bullet.dy * bullet.speed;
+        if (bullet.x < 0 || bullet.x > game.map.width || bullet.y < 0 || bullet.y > game.map.height) {
+          bullet.markedForDeletion = true;
+        }
+      });
+
+      // Bullet collisions
+      game.bullets.forEach(bullet => {
+        // Wall (use nearby chunks)
+        const nearWalls = getWallsNear(game.map, bullet);
+        for (let wall of nearWalls) {
+          if (bullet.type !== 2 && SharedUtils.isColliding(bullet, wall)) {
+            bullet.markedForDeletion = true;
+            break;
+          }
+        }
+        // Players
+        for (let [id, player] of Object.entries(game.players)) {
+          if (bullet.ownerId !== player.id && SharedUtils.isColliding(bullet, player)) {
+            player.health -= bullet.damage - player.shield;
+            if (bullet.type === 3) player.health -= SharedConstants.BUFF_VALUES.EXPLOSIVE_BONUS;
+            bullet.markedForDeletion = true;
+          }
+        }
+      });
+
+      // Item pickup collision
+      for (let [id, player] of Object.entries(game.players)) {
+        for (let i = game.items.length - 1; i >= 0; i--) {
+          const item = game.items[i];
+          const itemRect = { x: item.x, y: item.y, width: SharedConstants.ITEM_SIZE, height: SharedConstants.ITEM_SIZE };
+          if (SharedUtils.isColliding(player, itemRect)) {
+            // Apply item effect based on type (6 active items)
+            switch(item.type) {
+              case 1: // Health
+                player.health = Math.min(player.maxHealth, player.health + SharedConstants.BUFF_VALUES.HEALTH_RESTORE);
+                break;
+              case 2: // Speed boost (10s)
+                player.buffTimers.speed = Math.max(player.buffTimers.speed, SharedConstants.BUFF_DURATION.SPEED); // refresh/extend
+                player.speed = player.defaultSpeed + SharedConstants.BUFF_VALUES.SPEED_BOOST;
+                break;
+              case 3: // Shield (15s)
+                player.shield = SharedConstants.BUFF_VALUES.SHIELD_VALUE;
+                player.buffTimers.shield = SharedConstants.BUFF_DURATION.SHIELD;
+                break;
+              case 4: // Damage boost (10s)
+                player.damage = player.defaultDamage + SharedConstants.BUFF_VALUES.DAMAGE_BOOST;
+                player.buffTimers.damage = SharedConstants.BUFF_DURATION.DAMAGE;
+                break;
+              case 5: // Piercing bullets (12s)
+                player.bulletType = 2;
+                player.buffTimers.piercing = SharedConstants.BUFF_DURATION.PIERCING;
+                player.buffTimers.explosive = 0; // cancel explosive
+                break;
+              case 6: // Explosive bullets (12s)
+                player.bulletType = 3;
+                player.buffTimers.explosive = SharedConstants.BUFF_DURATION.EXPLOSIVE;
+                player.buffTimers.piercing = 0; // cancel piercing
+                break;
+            }
+            // Remove item after pickup
+            game.items.splice(i, 1);
+          }
+        }
+      }
+
+      // Update buff timers and reset stats when expired
+      for (let [id, player] of Object.entries(game.players)) {
+        // Speed buff (keep boosted speed while active)
+        if (player.buffTimers.speed > 0) {
+          player.speed = player.defaultSpeed + SharedConstants.BUFF_VALUES.SPEED_BOOST;
+          player.buffTimers.speed--;
+          if (player.buffTimers.speed === 0) {
+            player.speed = player.defaultSpeed;
+          }
+        }
+        // Shield buff
+        if (player.buffTimers.shield > 0) {
+          player.buffTimers.shield--;
+          if (player.buffTimers.shield === 0) {
+            player.shield = 0;
+          }
+        }
+        // Damage buff
+        if (player.buffTimers.damage > 0) {
+          player.buffTimers.damage--;
+          if (player.buffTimers.damage === 0) {
+            player.damage = player.defaultDamage;
+          }
+        }
+        // Piercing buff
+        if (player.buffTimers.piercing > 0) {
+          player.buffTimers.piercing--;
+          if (player.buffTimers.piercing === 0) {
+            player.bulletType = player.defaultBulletType;
+          }
+        }
+        // Explosive buff
+        if (player.buffTimers.explosive > 0) {
+          player.buffTimers.explosive--;
+          if (player.buffTimers.explosive === 0) {
+            player.bulletType = player.defaultBulletType;
+          }
+        }
+      }
+
+      game.bullets = game.bullets.filter(b => {
+        if (b.markedForDeletion) return false;
+        if (b.x < -50 || b.x > game.map.width + 50 || b.y < -50 || b.y > game.map.height + 50) return false;
+        return true;
+      });
+
+      // Limit total bullets per room
+      if (game.bullets.length > SharedConstants.MAX_BULLETS_PER_ROOM) {
+        game.bullets = game.bullets.slice(-SharedConstants.MAX_BULLETS_PER_ROOM);
+      }
+
+      // Check win/lose
+      const players = Object.values(game.players);
+      if (players.length === 2) {
+        if (players[0].health <= 0) {
+          game.isGameOver = true;
+          game.winner = players[1].id;
+        } else if (players[1].health <= 0) {
+          game.isGameOver = true;
+          game.winner = players[0].id;
+        }
+      }
+
+      // Spawn items
+      spawnItems(game);
+    }
+  } catch (e) {
+    console.error('Physics loop error:', e);
+  }
+}, PHYSICS_INTERVAL);
+
+// Network loop - Send updates at 30fps (33ms) để giảm tải băng thông
+// Gửi ở tần suất thấp hơn physics (30fps thay vì 60fps) vẫn đủ mượt cho mắt thường
+// và giảm đáng kể network traffic, tránh lag qua internet
+const NETWORK_INTERVAL = 1000 / SharedConstants.NETWORK_UPDATE_RATE;
+const networkLoopId = setInterval(() => {
+  try {
+    for (let [roomId, game] of games) {
+      // Chỉ gửi update khi game đang playing
+      if (!game.isPlaying) continue;
+      
+      // Broadcast per-player with nearby bullets/items only
+      for (let [sockId, pl] of Object.entries(game.players)) {
+        const view = buildViewStateFor(game, pl);
+        io.to(sockId).emit('updateState', view);
+      }
+    }
+  } catch (e) {
+    console.error('Network loop error:', e);
+  }
+}, NETWORK_INTERVAL);
+
+// Collision utility (now using SharedUtils)
+function isColliding(rect1, rect2) {
+  return SharedUtils.isColliding(rect1, rect2);
+}
+
+// Build a trimmed state for a specific player (Minecraft-like: only nearby)
+function buildViewStateFor(game, player) {
+  const padX = SharedConstants.VIEW_PADDING_X; // radius X to include entities
+  const padY = SharedConstants.VIEW_PADDING_Y; // radius Y to include entities
+  const rect = {
+    x: Math.max(0, player.x - padX),
+    y: Math.max(0, player.y - padY),
+    width: padX * 2,
+    height: padY * 2
+  };
+
+  const bullets = game.bullets.filter(b => (
+    b.x >= rect.x && b.x <= rect.x + rect.width &&
+    b.y >= rect.y && b.y <= rect.y + rect.height
+  ));
+
+  const items = game.items.filter(i => (
+    i.x + 30 >= rect.x && i.x <= rect.x + rect.width &&
+    i.y + 30 >= rect.y && i.y <= rect.y + rect.height
+  ));
+
+  return {
+    players: game.players,
+    bullets,
+    items,
+    map: { width: game.map.width, height: game.map.height },
+    isGameOver: game.isGameOver,
+    winner: game.winner
+  };
+}
+
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+====================
+FILE: SharedConstants.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\shared\SharedConstants.js
+====================
+/**
+ * SharedConstants.js
+ * 
+ * File này chứa tất cả các hằng số dùng chung cho cả Client và Server
+ * để đảm bảo đồng bộ giữa 2 bên và dễ dàng điều chỉnh gameplay.
+ * 
+ * Sử dụng:
+ * - Client: <script src="shared/SharedConstants.js"></script>
+ * - Server: const SharedConstants = require('./shared/SharedConstants.js');
+ */
+
+// ===========================
+// MAP CONSTANTS
+// ===========================
+const MAP_WIDTH = 1200;
+const MAP_HEIGHT = 1200;
+const TILE_SIZE = 50;  // Kích thước ô map (tương ứng với ảnh wall.png)
+const CHUNK_SIZE = 200; // Kích thước chunk để tối ưu collision detection
+
+// ===========================
+// TANK CONSTANTS
+// ===========================
+const TANK_WIDTH = 46;
+const TANK_HEIGHT = 46;
+const TANK_BASE_SPEED = 2.5;
+const TANK_HITBOX_PADDING = 8; // Thu nhỏ hitbox để đi qua khe hẹp dễ hơn
+
+// ===========================
+// BULLET CONSTANTS
+// ===========================
+const BULLET_WIDTH = 10;
+const BULLET_HEIGHT = 10;
+const BULLET_SPEED = 12.5; // 5x tốc độ xe tăng
+const BULLET_DAMAGE_BASE = 10;
+const BULLET_BARREL_LENGTH = 35; // Khoảng cách spawn đạn từ tâm xe
+const SHOOT_COOLDOWN = 200; // ms giữa mỗi lần bắn
+
+// ===========================
+// PLAYER CONSTANTS
+// ===========================
+const PLAYER_MAX_HEALTH = 100;
+const PLAYER_BASE_DAMAGE = 10;
+const PLAYER_BASE_SHIELD = 0;
+
+// Vị trí spawn mặc định
+const PLAYER_P1_SPAWN = { x: 175, y: 175 };
+const PLAYER_P2_SPAWN_OFFSET = { x: 225, y: 225 }; // Tính từ góc dưới-phải map
+
+// ===========================
+// ITEM CONSTANTS
+// ===========================
+const ITEM_SIZE = 30;
+const ITEM_SPAWN_INTERVAL = 120; // frames (2 seconds tại 60fps)
+const ITEM_MAX_PER_ROOM = 30; // Giới hạn số item spawn
+
+// Số lượng target cho mỗi loại item (6 types)
+const ITEM_TARGETS = {
+  HEALTH: 4,      // type 1
+  SPEED: 4,       // type 2
+  SHIELD: 4,      // type 3
+  DAMAGE: 4,      // type 4
+  PIERCING: 3,    // type 5
+  EXPLOSIVE: 3    // type 6
+};
+
+// Thời gian buff (frames tại 60fps)
+const BUFF_DURATION = {
+  SPEED: 600,      // 10 seconds
+  SHIELD: 900,     // 15 seconds
+  DAMAGE: 600,     // 10 seconds
+  PIERCING: 720,   // 12 seconds
+  EXPLOSIVE: 720   // 12 seconds
+};
+
+// Giá trị buff
+const BUFF_VALUES = {
+  HEALTH_RESTORE: 30,
+  SPEED_BOOST: 1.5,   // Thêm vào base speed
+  SHIELD_VALUE: 10,   // Giảm damage nhận vào
+  DAMAGE_BOOST: 15,   // Thêm vào base damage
+  EXPLOSIVE_BONUS: 5  // Thêm damage cho explosive bullet
+};
+
+// ===========================
+// MAP GENERATION CONSTANTS
+// ===========================
+const MAP_OBSTACLE_DENSITY = 0.10; // 10% chance để spawn obstacle
+const MAP_SAFE_ZONE_SIZE = 7; // 7x7 tiles safe zone ở 2 góc
+
+// ===========================
+// NETWORK CONSTANTS
+// ===========================
+const PHYSICS_UPDATE_RATE = 60; // Hz (16ms per frame)
+const NETWORK_UPDATE_RATE = 30; // Hz (33ms per frame)
+const INPUT_THROTTLE_RATE = 30; // Hz (33ms) - giới hạn gửi input
+
+// Interpolation settings
+const LERP_FACTOR = 0.5; // Độ mượt khi lerp vị trí (0-1)
+const SNAP_THRESHOLD = 50; // pixels - Nếu lệch > 50px thì snap thay vì lerp
+
+// View distance (Minecraft-like optimization)
+const VIEW_PADDING_X = 800;
+const VIEW_PADDING_Y = 600;
+
+// ===========================
+// ROOM CONSTANTS
+// ===========================
+const MAX_BULLETS_PER_ROOM = 30;
+const MAX_PLAYERS_PER_ROOM = 2;
+
+// ===========================
+// Export cho cả Node.js và Browser
+// ===========================
+const SharedConstants = {
+  // Map
+  MAP_WIDTH,
+  MAP_HEIGHT,
+  TILE_SIZE,
+  CHUNK_SIZE,
+  
+  // Tank
+  TANK_WIDTH,
+  TANK_HEIGHT,
+  TANK_BASE_SPEED,
+  TANK_HITBOX_PADDING,
+  
+  // Bullet
+  BULLET_WIDTH,
+  BULLET_HEIGHT,
+  BULLET_SPEED,
+  BULLET_DAMAGE_BASE,
+  BULLET_BARREL_LENGTH,
+  SHOOT_COOLDOWN,
+  
+  // Player
+  PLAYER_MAX_HEALTH,
+  PLAYER_BASE_DAMAGE,
+  PLAYER_BASE_SHIELD,
+  PLAYER_P1_SPAWN,
+  PLAYER_P2_SPAWN_OFFSET,
+  
+  // Items
+  ITEM_SIZE,
+  ITEM_SPAWN_INTERVAL,
+  ITEM_MAX_PER_ROOM,
+  ITEM_TARGETS,
+  BUFF_DURATION,
+  BUFF_VALUES,
+  
+  // Map Generation
+  MAP_OBSTACLE_DENSITY,
+  MAP_SAFE_ZONE_SIZE,
+  
+  // Network
+  PHYSICS_UPDATE_RATE,
+  NETWORK_UPDATE_RATE,
+  INPUT_THROTTLE_RATE,
+  LERP_FACTOR,
+  SNAP_THRESHOLD,
+  VIEW_PADDING_X,
+  VIEW_PADDING_Y,
+  
+  // Room
+  MAX_BULLETS_PER_ROOM,
+  MAX_PLAYERS_PER_ROOM
+};
+
+// Export cho Node.js (server)
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = SharedConstants;
+}
+
+// Export cho Browser (client)
+if (typeof window !== 'undefined') {
+  window.SharedConstants = SharedConstants;
+}
+
+====================
+FILE: SharedUtils.js
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\shared\SharedUtils.js
+====================
+/**
+ * SharedUtils.js
+ * 
+ * File này chứa các hàm utility dùng chung cho cả Client và Server
+ * để đảm bảo logic nhất quán giữa 2 bên.
+ * 
+ * Quan trọng: Client-side Prediction
+ * ===================================
+ * Client cần dùng cùng hàm isColliding để kiểm tra va chạm với tường
+ * TRƯỚC KHI gửi input lên server. Điều này tránh xe đi xuyên tường rồi
+ * bị server giật lùi lại (rubber banding).
+ * 
+ * Sử dụng:
+ * - Client: <script src="shared/SharedUtils.js"></script>
+ * - Server: const SharedUtils = require('./shared/SharedUtils.js');
+ */
+
+/**
+ * Kiểm tra va chạm giữa 2 hình chữ nhật (AABB - Axis-Aligned Bounding Box)
+ * @param {Object} rect1 - {x, y, width, height}
+ * @param {Object} rect2 - {x, y, width, height}
+ * @returns {boolean} - true nếu 2 hình chữ nhật va chạm
+ */
+function isColliding(rect1, rect2) {
+  return (
+    rect1.x < rect2.x + rect2.width &&
+    rect1.x + rect1.width > rect2.x &&
+    rect1.y < rect2.y + rect2.height &&
+    rect1.y + rect1.height > rect2.y
+  );
+}
+
+/**
+ * Kiểm tra va chạm với mảng các tường
+ * @param {Object} rect - {x, y, width, height}
+ * @param {Array} walls - Mảng các wall object
+ * @returns {boolean} - true nếu rect va chạm với bất kỳ wall nào
+ */
+function isCollidingWithWalls(rect, walls) {
+  for (let wall of walls) {
+    if (isColliding(rect, wall)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Tính khoảng cách giữa 2 điểm
+ * @param {number} x1 
+ * @param {number} y1 
+ * @param {number} x2 
+ * @param {number} y2 
+ * @returns {number} - Khoảng cách Euclidean
+ */
+function distance(x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+/**
+ * Linear interpolation (Lerp)
+ * @param {number} start - Giá trị bắt đầu
+ * @param {number} end - Giá trị kết thúc
+ * @param {number} factor - Hệ số lerp (0-1)
+ * @returns {number} - Giá trị đã lerp
+ */
+function lerp(start, end, factor) {
+  return start + (end - start) * factor;
+}
+
+/**
+ * Clamp một giá trị trong khoảng [min, max]
+ * @param {number} value 
+ * @param {number} min 
+ * @param {number} max 
+ * @returns {number}
+ */
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+/**
+ * Kiểm tra xem một điểm có nằm trong hình chữ nhật không
+ * @param {number} x 
+ * @param {number} y 
+ * @param {Object} rect - {x, y, width, height}
+ * @returns {boolean}
+ */
+function pointInRect(x, y, rect) {
+  return (
+    x >= rect.x &&
+    x <= rect.x + rect.width &&
+    y >= rect.y &&
+    y <= rect.y + rect.height
+  );
+}
+
+/**
+ * Tính góc (radian) từ điểm (x1, y1) đến điểm (x2, y2)
+ * @param {number} x1 
+ * @param {number} y1 
+ * @param {number} x2 
+ * @param {number} y2 
+ * @returns {number} - Góc tính bằng radian
+ */
+function angleToPoint(x1, y1, x2, y2) {
+  return Math.atan2(y2 - y1, x2 - x1);
+}
+
+// ===========================
+// Export cho cả Node.js và Browser
+// ===========================
+const SharedUtils = {
+  isColliding,
+  isCollidingWithWalls,
+  distance,
+  lerp,
+  clamp,
+  pointInRect,
+  angleToPoint
+};
+
+// Export cho Node.js (server)
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = SharedUtils;
+}
+
+// Export cho Browser (client)
+if (typeof window !== 'undefined') {
+  window.SharedUtils = SharedUtils;
+}
+
+====================
+FILE: index.html
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\index.html
+====================
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Tank Battle Online</title>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;700&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="images/tank1.png" type="image/png">
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    
+    <!-- Shared Constants and Utils -->
+    <script src="shared/SharedConstants.js"></script>
+    <script src="shared/SharedUtils.js"></script>
+</head>
+<body>
+
+    <canvas id="canvas" width="1200" height="600"></canvas>
+
+    <!-- Loading Overlay -->
+    <div id="loading-layer">
+        <div class="loading-box">
+            <h2>ĐANG TẢI TÀI NGUYÊN...</h2>
+            <div class="progress">
+                <div class="progress-bar" id="loading-progress" style="width: 0%"></div>
+            </div>
+            <div id="loading-text">Đang tải hình ảnh (0%)</div>
+        </div>
+    </div>
+
+    <!-- Lobby Menu -->
+    <div id="lobby-layer" style="display: none;">
+        <div class="lobby-box">
+            <h1>TANK BATTLE ONLINE</h1>
+            <div class="lobby-content">
+                <button id="createRoomBtn" class="primary-btn">TẠO PHÒNG MỚI</button>
+                <div class="divider">HOẶC</div>
+                <label for="roomIdInput" style="margin-bottom: 8px;">Nhập Room ID:</label>
+                <input type="text" id="roomIdInput" placeholder="Nhập mã phòng..." maxlength="10">
+                <button id="joinRoomBtn" class="secondary-btn">THAM GIA PHÒNG</button>
+                <button id="settingsBtn">CÀI ĐẶT</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Waiting Room (chờ người chơi thứ 2) -->
+    <div id="waiting-layer" style="display: none;">
+        <div class="waiting-box">
+            <h1>PHÒNG CHƠI</h1>
+            <div class="waiting-content">
+                <p class="instruction-text">Gửi mã phòng cho bạn bè để tham gia:</p>
+                <div class="room-id-container">
+                    <p id="room-id-display">Room ID: <span id="room-id-text"></span></p>
+                    <button id="copyRoomIdBtn" class="copy-btn">📋 COPY</button>
+                </div>
+                <p id="player-count">Người chơi: <span id="player-count-text">1/2</span></p>
+                <div id="player-list">
+                    <div class="player-item">P1: Đang chờ...</div>
+                    <div class="player-item">P2: Chưa tham gia</div>
+                </div>
+                <p class="waiting-msg">Đang chờ người chơi thứ hai...</p>
+                <button id="startGameBtn" style="display: none;">BẮT ĐẦU TRẬN ĐẤU</button>
+                <button id="leaveRoomBtn">RỜI PHÒNG</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Menu -->
+    <div id="settings-layer" style="display: none;">
+        <div class="settings-box">
+            <h1>CÀI ĐẶT PHÍM</h1>
+            <div class="settings-content">
+                <div class="control-group">
+                    <label>Di chuyển lên: <input type="text" id="control-up" maxlength="1" value="w"></label>
+                    <label>Di chuyển xuống: <input type="text" id="control-down" maxlength="1" value="s"></label>
+                    <label>Di chuyển trái: <input type="text" id="control-left" maxlength="1" value="a"></label>
+                    <label>Di chuyển phải: <input type="text" id="control-right" maxlength="1" value="d"></label>
+                    <label>Bắn: <input type="text" id="control-shoot" maxlength="1" value=" "></label>
+                </div>
+            </div>
+            <div class="settings-btn-group">
+                <button id="saveSettingsBtn">LƯU</button>
+                <button id="backToLobbyBtn">QUAY LẠI</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Màn hình game over -->
+    <div id="game-over-layer" style="display: none;">
+        <div class="game-over-box">
+            <h2 id="winner-text">PLAYER 1 CHIẾN THẮNG!</h2>
+            <div class="btn-group">
+                <button id="restartBtn">CHƠI LẠI</button>
+                <button id="homeBtn">MÀN HÌNH CHÍNH</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/Utils.js"></script>
+    <script src="js/AudioManager.js"></script>
+    <script src="js/Bullet.js"></script>
+    <script src="js/Tank.js"></script>
+    <script src="js/Items.js"></script>
+    <script src="js/Particle.js"></script>
+    <script src="js/Map.js"></script>
+    <script src="js/Config.js"></script>
+    <script src="js/ImageLoader.js"></script>
+    <script src="js/Renderer.js"></script>
+    <script src="js/Game.js"></script>
+    <script src="js/UIManager.js"></script>
+    <script src="js/main.js"></script>
+
+</body>
+</html>
+
+====================
+FILE: style.css
+PATH: C:\Users\ADMIN\Documents\vscode\TankBattle_V3\style.css
+====================
+/* style.css - Đã tối ưu cho Game Online */
+
+:root {
+    --main-bg-color: #1a1a1a;
+    --accent-color: #ffc107;
+    --text-color: #e0e0e0;
+}
+
+body {
+    background-color: var(--main-bg-color);
+    background-image: 
+        linear-gradient(rgba(0,0,0,0.7), rgba(0,0,0,0.7)),
+        repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.05) 2px, rgba(255,255,255,0.05) 4px),
+        repeating-linear-gradient(90deg, transparent, transparent 2px, rgba(255,255,255,0.05) 2px, rgba(255,255,255,0.05) 4px);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+    font-family: 'Chakra Petch', sans-serif;
+    color: var(--text-color);
+    overflow: hidden;
+}
+
+/* Canvas căn giữa màn hình */
+canvas {
+    background-color: #000;
+    border-radius: 8px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.8);
+    border: 2px solid #333;
+    display: block; /* Đảm bảo không bị dính inline spacing */
+}
+
+/* --- LOBBY MENU --- */
+#lobby-layer {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.9);
+    z-index: 300;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.lobby-box {
+    background-color: #2c3e50;
+    border: 4px solid #f1c40f;
+    padding: 50px;
+    border-radius: 15px;
+    text-align: center;
+    box-shadow: 0 0 20px rgba(241, 196, 15, 0.5);
+    min-width: 350px;
+}
+
+.lobby-box h1 {
+    color: #fff;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 48px;
+    margin-bottom: 40px;
+    text-transform: uppercase;
+    text-shadow: 0 0 10px #f1c40f;
+}
+
+.lobby-content {
+    margin-bottom: 30px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.lobby-content label {
+    color: #e0e0e0;
+    font-size: 18px;
+    margin-right: 10px;
+}
+
+.lobby-content input {
+    padding: 10px;
+    font-size: 16px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    width: 100%;
+    box-sizing: border-box;
+    margin-bottom: 10px;
+}
+
+.lobby-content input:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 5px rgba(52, 152, 219, 0.5);
+}
+
+.divider {
+    text-align: center;
+    color: #95a5a6;
+    font-size: 14px;
+    margin: 15px 0;
+    position: relative;
+}
+
+.divider::before,
+.divider::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 40%;
+    height: 1px;
+    background-color: #7f8c8d;
+}
+
+.divider::before {
+    left: 0;
+}
+
+.divider::after {
+    right: 0;
+}
+
+.primary-btn {
+    background-color: #27ae60 !important;
+    color: white !important;
+    border: 2px solid #2ecc71 !important;
+    font-size: 20px !important;
+    padding: 15px 30px !important;
+}
+
+.primary-btn:hover {
+    background-color: #2ecc71 !important;
+    transform: scale(1.05) !important;
+}
+
+.secondary-btn {
+    background-color: #3498db !important;
+    color: white !important;
+    border: 2px solid #5dade2 !important;
+    font-size: 18px !important;
+    padding: 12px 25px !important;
+}
+
+.secondary-btn:hover {
+    background-color: #5dade2 !important;
+    transform: scale(1.05) !important;
+}
+
+/* --- WAITING ROOM --- */
+#waiting-layer {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.9);
+    z-index: 300;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.waiting-box {
+    background-color: #2c3e50;
+    border: 4px solid #3498db;
+    padding: 40px;
+    border-radius: 15px;
+    text-align: center;
+    box-shadow: 0 0 20px rgba(52, 152, 219, 0.5);
+    min-width: 400px;
+}
+
+.waiting-box h1 {
+    color: #fff;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 40px;
+    margin-bottom: 30px;
+    text-transform: uppercase;
+    text-shadow: 0 0 10px #3498db;
+}
+
+.waiting-content {
+    color: #e0e0e0;
+    font-size: 16px;
+}
+
+.waiting-content p {
+    margin: 15px 0;
+    font-size: 18px;
+}
+
+.instruction-text {
+    color: #95a5a6;
+    font-size: 14px;
+    font-style: italic;
+    margin-bottom: 10px;
+}
+
+.room-id-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 15px;
+    margin-bottom: 10px;
+}
+
+#room-id-display {
+    margin: 0 !important;
+}
+
+#room-id-text {
+    color: #f1c40f;
+    font-weight: bold;
+    font-size: 22px;
+    font-family: 'Courier New', monospace;
+    user-select: all;
+    cursor: text;
+    padding: 5px 10px;
+    background-color: rgba(0,0,0,0.3);
+    border-radius: 4px;
+    white-space: nowrap;
+    overflow: visible;
+    display: inline-block;
+}
+
+.copy-btn {
+    background-color: #3498db;
+    color: white;
+    border: 2px solid #5dade2;
+    padding: 8px 16px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: 0.2s;
+}
+
+.copy-btn:hover {
+    background-color: #5dade2;
+    transform: scale(1.05);
+}
+
+.copy-btn:active {
+    transform: scale(0.95);
+}
+
+#player-count-text {
+    color: #2ecc71;
+    font-weight: bold;
+    font-size: 20px;
+}
+
+#player-list {
+    margin: 20px 0;
+    text-align: left;
+    background-color: rgba(0,0,0,0.3);
+    padding: 15px;
+    border-radius: 8px;
+}
+
+.player-item {
+    padding: 8px;
+    margin: 5px 0;
+    background-color: rgba(255,255,255,0.05);
+    border-radius: 4px;
+}
+
+.waiting-msg {
+    color: #f39c12;
+    font-style: italic;
+    margin: 20px 0;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.lobby-content button {
+    padding: 15px 30px;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 20px;
+    font-weight: bold;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: 0.3s;
+    margin: 10px;
+}
+
+#joinBtn {
+    background-color: #27ae60;
+    color: white;
+}
+
+#joinBtn:hover {
+    background-color: #2ecc71;
+    transform: scale(1.05);
+}
+
+#settingsBtn {
+    background-color: #f39c12;
+    color: white;
+}
+
+#settingsBtn:hover {
+    background-color: #e67e22;
+    transform: scale(1.05);
+}
+
+/* Loading Overlay */
+#loading-layer {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.9);
+    z-index: 400;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.loading-box {
+    background-color: #2c3e50;
+    border: 4px solid #f1c40f;
+    padding: 40px;
+    border-radius: 15px;
+    text-align: center;
+    box-shadow: 0 0 20px rgba(241, 196, 15, 0.5);
+    min-width: 360px;
+}
+
+.loading-box h2 {
+    color: #fff;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 28px;
+    margin-bottom: 20px;
+    text-transform: uppercase;
+}
+
+.progress {
+    width: 100%;
+    height: 16px;
+    background: #1a1a1a;
+    border: 2px solid #f1c40f;
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 12px;
+}
+
+.progress-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #f1c40f, #ffd54f);
+    transition: width 0.2s ease;
+}
+
+#loading-text {
+    color: #e0e0e0;
+    font-size: 16px;
+}
+
+/* --- GAME OVER LAYER --- */
+#game-over-layer {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.85); /* Nền đen mờ */
+    z-index: 200; /* Nằm đè lên tất cả */
+    
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Cái bảng thông báo */
+.game-over-box {
+    background-color: #2c3e50;
+    border: 4px solid #f1c40f; /* Viền vàng */
+    padding: 40px;
+    border-radius: 15px;
+    text-align: center;
+    box-shadow: 0 0 20px rgba(241, 196, 15, 0.5);
+    min-width: 300px;
+}
+
+/* Chữ người thắng */
+#winner-text {
+    color: #fff;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 32px;
+    margin-bottom: 30px;
+    text-transform: uppercase;
+}
+
+/* Nhóm nút bấm */
+.btn-group {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+/* Kiểu chung cho 2 nút */
+.game-over-box button {
+    padding: 12px 20px;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 18px;
+    font-weight: bold;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+/* Nút Chơi lại (Màu xanh) */
+#restartBtn {
+    background-color: #27ae60;
+    color: white;
+}
+#restartBtn:hover { background-color: #2ecc71; }
+
+/* Nút Về màn hình chính (Màu đỏ) */
+#homeBtn {
+    background-color: #c0392b;
+    color: white;
+}
+#homeBtn:hover { background-color: #e74c3c; }
+/* --- MÀN HÌNH CHÍNH (Main Menu) --- */
+
+/* --- SETTINGS MENU --- */
+#settings-layer {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.9);
+    z-index: 400;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.settings-box {
+    background-color: #2c3e50;
+    border: 4px solid #f1c40f;
+    padding: 40px;
+    border-radius: 15px;
+    text-align: center;
+    box-shadow: 0 0 20px rgba(241, 196, 15, 0.5);
+    min-width: 400px;
+}
+
+.settings-box h1 {
+    color: #fff;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 36px;
+    margin-bottom: 30px;
+    text-transform: uppercase;
+    text-shadow: 0 0 10px #f1c40f;
+}
+
+.settings-content {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 30px;
+}
+
+.control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.control-group label {
+    color: #e0e0e0;
+    font-size: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+}
+
+.control-group input {
+    width: 80px;
+    padding: 8px;
+    text-align: center;
+    font-size: 16px;
+    border: 2px solid #f1c40f;
+    border-radius: 4px;
+    background-color: #1a1a1a;
+    color: #fff;
+    font-family: 'Chakra Petch', sans-serif;
+}
+
+.settings-btn-group {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+}
+
+.settings-btn-group button {
+    padding: 12px 25px;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 18px;
+    font-weight: bold;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: 0.3s;
+    text-transform: uppercase;
+}
+
+#saveSettingsBtn {
+    background-color: #27ae60;
+    color: white;
+}
+#saveSettingsBtn:hover { background-color: #2ecc71; transform: scale(1.05); }
+
+#backToLobbyBtn {
+    background-color: #c0392b;
+    color: white;
+}
+#backToLobbyBtn:hover { background-color: #e74c3c; transform: scale(1.05); }

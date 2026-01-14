@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Tank Battle Online</title>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;700&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="images/tank1.png" type="image/png">
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    
+    <!-- Shared Constants and Utils -->
+    <script src="shared/SharedConstants.js"></script>
+    <script src="shared/SharedUtils.js"></script>
+</head>
+<body>
+
+    <canvas id="canvas" width="1200" height="600"></canvas>
+
+    <!-- Loading Overlay -->
+    <div id="loading-layer">
+        <div class="loading-box">
+            <h2>ĐANG TẢI TÀI NGUYÊN...</h2>
+            <div class="progress">
+                <div class="progress-bar" id="loading-progress" style="width: 0%"></div>
+            </div>
+            <div id="loading-text">Đang tải hình ảnh (0%)</div>
+        </div>
+    </div>
+
+    <!-- Lobby Menu -->
+    <div id="lobby-layer" style="display: none;">
+        <div class="lobby-box">
+            <h1>TANK BATTLE ONLINE</h1>
+            <div class="lobby-content">
+                <button id="createRoomBtn" class="primary-btn">TẠO PHÒNG MỚI</button>
+                <div class="divider">HOẶC</div>
+                <label for="roomIdInput" style="margin-bottom: 8px;">Nhập Room ID:</label>
+                <input type="text" id="roomIdInput" placeholder="Nhập mã phòng..." maxlength="10">
+                <button id="joinRoomBtn" class="secondary-btn">THAM GIA PHÒNG</button>
+                <button id="settingsBtn">CÀI ĐẶT</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Waiting Room (chờ người chơi thứ 2) -->
+    <div id="waiting-layer" style="display: none;">
+        <div class="waiting-box">
+            <h1>PHÒNG CHƠI</h1>
+            <div class="waiting-content">
+                <p class="instruction-text">Gửi mã phòng cho bạn bè để tham gia:</p>
+                <div class="room-id-container">
+                    <p id="room-id-display">Room ID: <span id="room-id-text"></span></p>
+                    <button id="copyRoomIdBtn" class="copy-btn">📋 COPY</button>
+                </div>
+                <p id="player-count">Người chơi: <span id="player-count-text">1/2</span></p>
+                <div id="player-list">
+                    <div class="player-item">P1: Đang chờ...</div>
+                    <div class="player-item">P2: Chưa tham gia</div>
+                </div>
+                <p class="waiting-msg">Đang chờ người chơi thứ hai...</p>
+                <button id="startGameBtn" style="display: none;">BẮT ĐẦU TRẬN ĐẤU</button>
+                <button id="leaveRoomBtn">RỜI PHÒNG</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Menu -->
+    <div id="settings-layer" style="display: none;">
+        <div class="settings-box">
+            <h1>CÀI ĐẶT PHÍM</h1>
+            <div class="settings-content">
+                <div class="control-group">
+                    <label>Di chuyển lên: <input type="text" id="control-up" maxlength="1" value="w"></label>
+                    <label>Di chuyển xuống: <input type="text" id="control-down" maxlength="1" value="s"></label>
+                    <label>Di chuyển trái: <input type="text" id="control-left" maxlength="1" value="a"></label>
+                    <label>Di chuyển phải: <input type="text" id="control-right" maxlength="1" value="d"></label>
+                    <label>Bắn: <input type="text" id="control-shoot" maxlength="1" value=" "></label>
+                </div>
+            </div>
+            <div class="settings-btn-group">
+                <button id="saveSettingsBtn">LƯU</button>
+                <button id="backToLobbyBtn">QUAY LẠI</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Màn hình game over -->
+    <div id="game-over-layer" style="display: none;">
+        <div class="game-over-box">
+            <h2 id="winner-text">PLAYER 1 CHIẾN THẮNG!</h2>
+            <div class="btn-group">
+                <button id="restartBtn">CHƠI LẠI</button>
+                <button id="homeBtn">MÀN HÌNH CHÍNH</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/Utils.js"></script>
+    <script src="js/AudioManager.js"></script>
+    <script src="js/Bullet.js"></script>
+    <script src="js/Tank.js"></script>
+    <script src="js/Items.js"></script>
+    <script src="js/Particle.js"></script>
+    <script src="js/Map.js"></script>
+    <script src="js/Config.js"></script>
+    <script src="js/ImageLoader.js"></script>
+    <script src="js/Renderer.js"></script>
+    <script src="js/Game.js"></script>
+    <script src="js/UIManager.js"></script>
+    <script src="js/main.js"></script>
+
+</body>
+</html>

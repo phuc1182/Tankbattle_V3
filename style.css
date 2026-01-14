@@ -1,0 +1,513 @@
+/* style.css - Đã tối ưu cho Game Online */
+
+:root {
+    --main-bg-color: #1a1a1a;
+    --accent-color: #ffc107;
+    --text-color: #e0e0e0;
+}
+
+body {
+    background-color: var(--main-bg-color);
+    background-image: 
+        linear-gradient(rgba(0,0,0,0.7), rgba(0,0,0,0.7)),
+        repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.05) 2px, rgba(255,255,255,0.05) 4px),
+        repeating-linear-gradient(90deg, transparent, transparent 2px, rgba(255,255,255,0.05) 2px, rgba(255,255,255,0.05) 4px);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+    font-family: 'Chakra Petch', sans-serif;
+    color: var(--text-color);
+    overflow: hidden;
+}
+
+/* Canvas căn giữa màn hình */
+canvas {
+    background-color: #000;
+    border-radius: 8px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.8);
+    border: 2px solid #333;
+    display: block; /* Đảm bảo không bị dính inline spacing */
+}
+
+/* --- LOBBY MENU --- */
+#lobby-layer {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.9);
+    z-index: 300;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.lobby-box {
+    background-color: #2c3e50;
+    border: 4px solid #f1c40f;
+    padding: 50px;
+    border-radius: 15px;
+    text-align: center;
+    box-shadow: 0 0 20px rgba(241, 196, 15, 0.5);
+    min-width: 350px;
+}
+
+.lobby-box h1 {
+    color: #fff;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 48px;
+    margin-bottom: 40px;
+    text-transform: uppercase;
+    text-shadow: 0 0 10px #f1c40f;
+}
+
+.lobby-content {
+    margin-bottom: 30px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.lobby-content label {
+    color: #e0e0e0;
+    font-size: 18px;
+    margin-right: 10px;
+}
+
+.lobby-content input {
+    padding: 10px;
+    font-size: 16px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    width: 100%;
+    box-sizing: border-box;
+    margin-bottom: 10px;
+}
+
+.lobby-content input:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 5px rgba(52, 152, 219, 0.5);
+}
+
+.divider {
+    text-align: center;
+    color: #95a5a6;
+    font-size: 14px;
+    margin: 15px 0;
+    position: relative;
+}
+
+.divider::before,
+.divider::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 40%;
+    height: 1px;
+    background-color: #7f8c8d;
+}
+
+.divider::before {
+    left: 0;
+}
+
+.divider::after {
+    right: 0;
+}
+
+.primary-btn {
+    background-color: #27ae60 !important;
+    color: white !important;
+    border: 2px solid #2ecc71 !important;
+    font-size: 20px !important;
+    padding: 15px 30px !important;
+}
+
+.primary-btn:hover {
+    background-color: #2ecc71 !important;
+    transform: scale(1.05) !important;
+}
+
+.secondary-btn {
+    background-color: #3498db !important;
+    color: white !important;
+    border: 2px solid #5dade2 !important;
+    font-size: 18px !important;
+    padding: 12px 25px !important;
+}
+
+.secondary-btn:hover {
+    background-color: #5dade2 !important;
+    transform: scale(1.05) !important;
+}
+
+/* --- WAITING ROOM --- */
+#waiting-layer {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.9);
+    z-index: 300;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.waiting-box {
+    background-color: #2c3e50;
+    border: 4px solid #3498db;
+    padding: 40px;
+    border-radius: 15px;
+    text-align: center;
+    box-shadow: 0 0 20px rgba(52, 152, 219, 0.5);
+    min-width: 400px;
+}
+
+.waiting-box h1 {
+    color: #fff;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 40px;
+    margin-bottom: 30px;
+    text-transform: uppercase;
+    text-shadow: 0 0 10px #3498db;
+}
+
+.waiting-content {
+    color: #e0e0e0;
+    font-size: 16px;
+}
+
+.waiting-content p {
+    margin: 15px 0;
+    font-size: 18px;
+}
+
+.instruction-text {
+    color: #95a5a6;
+    font-size: 14px;
+    font-style: italic;
+    margin-bottom: 10px;
+}
+
+.room-id-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 15px;
+    margin-bottom: 10px;
+}
+
+#room-id-display {
+    margin: 0 !important;
+}
+
+#room-id-text {
+    color: #f1c40f;
+    font-weight: bold;
+    font-size: 22px;
+    font-family: 'Courier New', monospace;
+    user-select: all;
+    cursor: text;
+    padding: 5px 10px;
+    background-color: rgba(0,0,0,0.3);
+    border-radius: 4px;
+    white-space: nowrap;
+    overflow: visible;
+    display: inline-block;
+}
+
+.copy-btn {
+    background-color: #3498db;
+    color: white;
+    border: 2px solid #5dade2;
+    padding: 8px 16px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: 0.2s;
+}
+
+.copy-btn:hover {
+    background-color: #5dade2;
+    transform: scale(1.05);
+}
+
+.copy-btn:active {
+    transform: scale(0.95);
+}
+
+#player-count-text {
+    color: #2ecc71;
+    font-weight: bold;
+    font-size: 20px;
+}
+
+#player-list {
+    margin: 20px 0;
+    text-align: left;
+    background-color: rgba(0,0,0,0.3);
+    padding: 15px;
+    border-radius: 8px;
+}
+
+.player-item {
+    padding: 8px;
+    margin: 5px 0;
+    background-color: rgba(255,255,255,0.05);
+    border-radius: 4px;
+}
+
+.waiting-msg {
+    color: #f39c12;
+    font-style: italic;
+    margin: 20px 0;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.lobby-content button {
+    padding: 15px 30px;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 20px;
+    font-weight: bold;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: 0.3s;
+    margin: 10px;
+}
+
+#joinBtn {
+    background-color: #27ae60;
+    color: white;
+}
+
+#joinBtn:hover {
+    background-color: #2ecc71;
+    transform: scale(1.05);
+}
+
+#settingsBtn {
+    background-color: #f39c12;
+    color: white;
+}
+
+#settingsBtn:hover {
+    background-color: #e67e22;
+    transform: scale(1.05);
+}
+
+/* Loading Overlay */
+#loading-layer {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.9);
+    z-index: 400;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.loading-box {
+    background-color: #2c3e50;
+    border: 4px solid #f1c40f;
+    padding: 40px;
+    border-radius: 15px;
+    text-align: center;
+    box-shadow: 0 0 20px rgba(241, 196, 15, 0.5);
+    min-width: 360px;
+}
+
+.loading-box h2 {
+    color: #fff;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 28px;
+    margin-bottom: 20px;
+    text-transform: uppercase;
+}
+
+.progress {
+    width: 100%;
+    height: 16px;
+    background: #1a1a1a;
+    border: 2px solid #f1c40f;
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 12px;
+}
+
+.progress-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #f1c40f, #ffd54f);
+    transition: width 0.2s ease;
+}
+
+#loading-text {
+    color: #e0e0e0;
+    font-size: 16px;
+}
+
+/* --- GAME OVER LAYER --- */
+#game-over-layer {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.85); /* Nền đen mờ */
+    z-index: 200; /* Nằm đè lên tất cả */
+    
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Cái bảng thông báo */
+.game-over-box {
+    background-color: #2c3e50;
+    border: 4px solid #f1c40f; /* Viền vàng */
+    padding: 40px;
+    border-radius: 15px;
+    text-align: center;
+    box-shadow: 0 0 20px rgba(241, 196, 15, 0.5);
+    min-width: 300px;
+}
+
+/* Chữ người thắng */
+#winner-text {
+    color: #fff;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 32px;
+    margin-bottom: 30px;
+    text-transform: uppercase;
+}
+
+/* Nhóm nút bấm */
+.btn-group {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+/* Kiểu chung cho 2 nút */
+.game-over-box button {
+    padding: 12px 20px;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 18px;
+    font-weight: bold;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+/* Nút Chơi lại (Màu xanh) */
+#restartBtn {
+    background-color: #27ae60;
+    color: white;
+}
+#restartBtn:hover { background-color: #2ecc71; }
+
+/* Nút Về màn hình chính (Màu đỏ) */
+#homeBtn {
+    background-color: #c0392b;
+    color: white;
+}
+#homeBtn:hover { background-color: #e74c3c; }
+/* --- MÀN HÌNH CHÍNH (Main Menu) --- */
+
+/* --- SETTINGS MENU --- */
+#settings-layer {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.9);
+    z-index: 400;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.settings-box {
+    background-color: #2c3e50;
+    border: 4px solid #f1c40f;
+    padding: 40px;
+    border-radius: 15px;
+    text-align: center;
+    box-shadow: 0 0 20px rgba(241, 196, 15, 0.5);
+    min-width: 400px;
+}
+
+.settings-box h1 {
+    color: #fff;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 36px;
+    margin-bottom: 30px;
+    text-transform: uppercase;
+    text-shadow: 0 0 10px #f1c40f;
+}
+
+.settings-content {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 30px;
+}
+
+.control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.control-group label {
+    color: #e0e0e0;
+    font-size: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+}
+
+.control-group input {
+    width: 80px;
+    padding: 8px;
+    text-align: center;
+    font-size: 16px;
+    border: 2px solid #f1c40f;
+    border-radius: 4px;
+    background-color: #1a1a1a;
+    color: #fff;
+    font-family: 'Chakra Petch', sans-serif;
+}
+
+.settings-btn-group {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+}
+
+.settings-btn-group button {
+    padding: 12px 25px;
+    font-family: 'Chakra Petch', sans-serif;
+    font-size: 18px;
+    font-weight: bold;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: 0.3s;
+    text-transform: uppercase;
+}
+
+#saveSettingsBtn {
+    background-color: #27ae60;
+    color: white;
+}
+#saveSettingsBtn:hover { background-color: #2ecc71; transform: scale(1.05); }
+
+#backToLobbyBtn {
+    background-color: #c0392b;
+    color: white;
+}
+#backToLobbyBtn:hover { background-color: #e74c3c; transform: scale(1.05); }
