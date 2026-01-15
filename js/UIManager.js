@@ -7,7 +7,6 @@ function initUI() {
     const settingsBtn = document.getElementById('settingsBtn');
     const saveSettingsBtn = document.getElementById('saveSettingsBtn');
     const backToLobbyBtn = document.getElementById('backToLobbyBtn');
-    const restartBtn = document.getElementById('restartBtn');
     const homeBtn = document.getElementById('homeBtn');
 
     // Load controls cho session hiện tại (không dùng localStorage)
@@ -33,22 +32,11 @@ function initUI() {
         lobbyLayer.style.display = 'flex';
     });
 
-    // NÚT CHƠI LẠI: Disconnect và quay về lobby
-    restartBtn.addEventListener('click', () => {
-        gameOverLayer.style.display = 'none';
-        // Disconnect khỏi room hiện tại
-        if (window.socket) {
-            window.socket.emit('leaveGame');
-        }
-        // Reload trang để quay về lobby
-        location.reload();
-    });
-
-    // NÚT MÀN HÌNH CHÍNH: Quay về lobby
+    // NÚT MÀN HÌNH CHÍNH: Rời phòng và quay về lobby
     homeBtn.addEventListener('click', () => {
         gameOverLayer.style.display = 'none';
-        if (window.socket) {
-            window.socket.emit('leaveGame');
+        if (window.socket && window.roomId) {
+            window.socket.emit('leaveRoom', { roomId: window.roomId });
         }
         location.reload();
     });

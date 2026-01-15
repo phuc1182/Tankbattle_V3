@@ -31,6 +31,18 @@ canvas {
     display: block; /* Đảm bảo không bị dính inline spacing */
 }
 
+/* Mini-map canvas (góc phải trên) */
+#minimap {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background-color: rgba(0, 0, 0, 0.7);
+    border: 2px solid #ffc107;
+    border-radius: 5px;
+    z-index: 100;
+    box-shadow: 0 0 10px rgba(255, 193, 7, 0.5);
+}
+
 /* --- LOBBY MENU --- */
 #lobby-layer {
     position: absolute;

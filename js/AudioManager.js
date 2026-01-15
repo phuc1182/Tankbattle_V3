@@ -5,10 +5,8 @@ class AudioManager {
         this.music = null;
         
         // === AUDIO OVERLAPPING CONFIG ===
-        // Chọn phương pháp xử lý overlapping cho sound ngắn (shooting, impact)
-        // 'clone': Dùng cloneNode() - đơn giản, hỗ trợ tốt
-        // 'pool': Object pooling - tối ưu hóa, tránh tạo instance mới mỗi lần
-        this.overlapMethod = 'clone'; // 'clone' | 'pool'
+        // Default dùng pooling để tránh tạo Audio liên tục (ngăn leak)
+        this.overlapMethod = 'pool'; // 'pool' | 'clone'
         
         // Cho pooling method: số instance pool mỗi sound
         this.soundPoolSize = 5; // 5 instance cho mỗi sound

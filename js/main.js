@@ -31,11 +31,14 @@ const roomIdText = document.getElementById('room-id-text');
 const playerCountText = document.getElementById('player-count-text');
 const copyRoomIdBtn = document.getElementById('copyRoomIdBtn');
 
+window.isHost = false;
+
 // Create room
 createRoomBtn.addEventListener('click', () => {
     const roomId = Math.random().toString(36).substr(2, 8).toUpperCase();
     socket.emit('createRoom', { roomId });
     window.roomId = roomId;
+    window.isHost = true;
 });
 
 // Join room
@@ -48,6 +51,7 @@ joinRoomBtn.addEventListener('click', () => {
     console.log('Attempting to join room:', roomId);
     socket.emit('joinRoom', { roomId });
     window.roomId = roomId;
+    window.isHost = false;
 });
 
 // Start game (chỉ host mới có nút này)
@@ -124,6 +128,7 @@ socket.on('roomCreated', (data) => {
     playerCountText.textContent = '1/2';
     window.playerId = data.playerId;
     window.isP1 = data.isP1;
+    window.isHost = true;
     // Host có nút Start (hiển khi đủ 2 người)
     startGameBtn.style.display = 'none';
     console.log('Room ID displayed:', roomIdText.textContent, 'window.roomId:', window.roomId);
@@ -136,13 +141,14 @@ socket.on('joinedRoom', (data) => {
     playerCountText.textContent = data.playerCount + '/2';
     window.playerId = data.playerId;
     window.isP1 = data.isP1;
+    window.isHost = false;
     if (data.playerCount === 2) {
         document.querySelector('.waiting-msg').textContent = 'Đủ người chơi! Đang chờ host bắt đầu...';
     }
 });
 socket.on('playerJoined', (data) => {
     playerCountText.textContent = data.playerCount + '/2';
-    if (data.playerCount === 2 && window.isP1) {
+    if (data.playerCount === 2 && window.isHost) {
         // Hiển nút Start cho host
         startGameBtn.style.display = 'block';
         document.querySelector('.waiting-msg').textContent = 'Đủ người chơi! Nhấn Start để bắt đầu.';
@@ -166,8 +172,25 @@ socket.on('roomNotFound', () => {
     roomIdInput.value = '';
 });
 
-socket.on('gameStarted', () => {
+socket.on('hostChanged', (data) => {
+    const { hostId } = data;
+    window.isHost = hostId === window.playerId;
+    // Nếu đang ở phòng chờ và đủ 2 người, hiển thị nút Start cho host mới
+    const countText = playerCountText.textContent || '0/2';
+    const count = parseInt(countText.split('/')[0], 10) || 0;
+    if (waitingLayer.style.display !== 'none' && count === 2) {
+        startGameBtn.style.display = window.isHost ? 'block' : 'none';
+    }
+});
+
+// Khi host rời phòng, kick tất cả thành viên về lobby
+socket.on('hostLeft', () => {
+    alert('Chủ phòng đã rời! Quay về màn hình chính.');
     waitingLayer.style.display = 'none';
+    gameOverLayer.style.display = 'none';
+    lobbyLayer.style.display = 'flex';
+    window.roomId = null;
+    roomIdInput.value = '';
 });
 
 socket.on('joined', (data) => {
@@ -177,6 +200,8 @@ socket.on('joined', (data) => {
 
 socket.on('gameState', (gameState) => {
     window.gameState = gameState;
+    // Ẩn phòng chờ khi bắt đầu chơi
+    waitingLayer.style.display = 'none';
     window.initGame();
 });
 

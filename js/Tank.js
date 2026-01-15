@@ -18,6 +18,7 @@ class Tank {
         this.shield = SharedConstants.PLAYER_BASE_SHIELD;
         this.damage = SharedConstants.PLAYER_BASE_DAMAGE;
         this.bulletType = 1;
+        this.speed = SharedConstants.TANK_BASE_SPEED;
         
         this.lastDx = 0; 
         this.lastDy = -1;
@@ -44,8 +45,8 @@ class Tank {
         this.lastServerY = y;
         
         // Queue input chưa được reconcile từ server
-        this.pendingInputs = []; // [{dx, dy, timestamp, seq}, ...]
-        this.inputSequenceNumber = 0; // Sequence number cho mỗi input
+        this.pendingInputs = []; // [{dx, dy, speed, seq}]
+        this.inputSequenceNumber = 0; // Sequence number cho mỗi input gửi lên server
         
         // Threshold để detect lệch quá xa (reconciliation)
         this.reconciliationThreshold = SharedConstants.SNAP_THRESHOLD; // Dùng lại SNAP_THRESHOLD
@@ -63,6 +64,26 @@ class Tank {
     
     // Lấy controls từ settings của session hiện tại hoặc dùng mặc định
     const controls = window.controlsP1 || { up: 'w', down: 's', left: 'a', right: 'd', shoot: ' ' };
+
+    // Helper gửi input kèm seq và apply predicted movement tương ứng
+    const sendInput = () => {
+        if (!window.socket) return;
+        const now = Date.now();
+        const { dx, dy } = this.predictMovement(this.movementPriority);
+        const seq = this.inputSequenceNumber++;
+        const moveSpeed = this.speed || SharedConstants.TANK_BASE_SPEED;
+        const input = { ...this.keys, priority: this.movementPriority, seq };
+        window.socket.emit('playerInput', { roomId: window.roomId || 'default', input });
+        this.lastInputSendTime = now;
+        this.lastSentPriority = [...this.movementPriority];
+
+        // Apply predicted movement cho input vừa gửi
+        if (dx !== 0 || dy !== 0) {
+            this.applyPredictedMovement(dx, dy, moveSpeed, { seq });
+            this.lastDx = dx;
+            this.lastDy = dy;
+        }
+    };
     
     window.addEventListener('keydown', (e) => {
         const oldKeys = JSON.stringify(this.keys);
@@ -100,33 +121,12 @@ class Tank {
         
         const now = Date.now();
         const priorityChanged = JSON.stringify(this.movementPriority) !== JSON.stringify(this.lastSentPriority || []);
-        
-        if ((JSON.stringify(this.keys) !== oldKeys || priorityChanged) && window.socket) {
-            // === CLIENT-SIDE PREDICTION: Apply movement ngay ===
-            // Nếu có thay đổi movement priority, predict + apply ngay
-            if (priorityChanged) {
-                const { dx, dy } = this.predictMovement(this.movementPriority);
-                if (dx !== 0 || dy !== 0) {
-                    this.applyPredictedMovement(dx, dy, SharedConstants.TANK_BASE_SPEED);
-                    this.lastDx = dx;
-                    this.lastDy = dy;
-                }
-            }
-            
-            // Gửi keys kèm priority array
-            const input = { ...this.keys, priority: this.movementPriority };
-            
-            // Shoot key hoặc priority thay đổi: gửi ngay lập tức
-            if (e.key === controls.shoot || priorityChanged) {
-                window.socket.emit('playerInput', { roomId: window.roomId || 'default', input });
-                this.lastInputSendTime = now;
-                this.lastSentPriority = [...this.movementPriority]; // Lưu priority đã gửi
-            }
-            // Movement keys khác: throttle 33ms
-            else if (now - this.lastInputSendTime >= this.inputSendInterval) {
-                window.socket.emit('playerInput', { roomId: window.roomId || 'default', input });
-                this.lastInputSendTime = now;
-                this.lastSentPriority = [...this.movementPriority];
+        const keysChanged = JSON.stringify(this.keys) !== oldKeys;
+
+        if (keysChanged || priorityChanged) {
+            // Gửi ngay nếu bắn hoặc priority đổi; nếu không thì throttle 33ms
+            if (e.key === controls.shoot || priorityChanged || (now - this.lastInputSendTime >= this.inputSendInterval)) {
+                sendInput();
             }
         }
     });
@@ -158,35 +158,11 @@ class Tank {
         
         const now = Date.now();
         const priorityChanged = JSON.stringify(this.movementPriority) !== JSON.stringify(this.lastSentPriority || []);
-        
-        if ((JSON.stringify(this.keys) !== oldKeys || priorityChanged) && window.socket) {
-            // === CLIENT-SIDE PREDICTION: Apply movement ngay khi nhả phím ===
-            if (priorityChanged) {
-                const { dx, dy } = this.predictMovement(this.movementPriority);
-                if (dx !== 0 || dy !== 0) {
-                    this.applyPredictedMovement(dx, dy, SharedConstants.TANK_BASE_SPEED);
-                    this.lastDx = dx;
-                    this.lastDy = dy;
-                } else {
-                    // Nếu không có phím di chuyển nữa, giữ hướng cuối
-                    // (lastDx, lastDy vẫn là hướng trước đó)
-                }
-            }
-            
-            // Gửi keys kèm priority array
-            const input = { ...this.keys, priority: this.movementPriority };
-            
-            // Shoot key release hoặc priority thay đổi: gửi ngay
-            if (e.key === controls.shoot || priorityChanged) {
-                window.socket.emit('playerInput', { roomId: window.roomId || 'default', input });
-                this.lastInputSendTime = now;
-                this.lastSentPriority = [...this.movementPriority];
-            }
-            // Movement keys khác: throttle 33ms
-            else if (now - this.lastInputSendTime >= this.inputSendInterval) {
-                window.socket.emit('playerInput', { roomId: window.roomId || 'default', input });
-                this.lastInputSendTime = now;
-                this.lastSentPriority = [...this.movementPriority];
+        const keysChanged = JSON.stringify(this.keys) !== oldKeys;
+
+        if (keysChanged || priorityChanged) {
+            if (e.key === controls.shoot || priorityChanged || (now - this.lastInputSendTime >= this.inputSendInterval)) {
+                sendInput();
             }
         }
     });
@@ -199,30 +175,28 @@ class Tank {
         this.targetX = data.x;
         this.targetY = data.y;
         
-        // === RECONCILIATION: Kiểm tra lệch giữa predicted và server ===
-        // Nếu predicted tương đối chính xác (lệch < threshold), keep using predicted
-        // Nếu lệch > threshold, reconcile (reset về server state + replay inputs)
-        const predictionError = SharedUtils.distance(this.predictedX, this.predictedY, data.x, data.y);
-        
-        if (predictionError > this.reconciliationThreshold) {
-            // Lệch quá xa: Reconcile
-            console.warn(`[Reconciliation] Error: ${predictionError.toFixed(1)}px, resetting...`);
-            
-            // Reset về server state
-            this.predictedX = data.x;
-            this.predictedY = data.y;
-            this.lastServerX = data.x;
-            this.lastServerY = data.y;
-            
-            // Xóa pending inputs vì server đã process rồi
-            this.pendingInputs = [];
-        } else {
-            // Lệch nhỏ: Keep using predicted, chỉ update lastServerX/Y để reference
-            this.lastServerX = data.x;
-            this.lastServerY = data.y;
+        // Server reconciliation: reset về server rồi replay các input chưa được server xử lý
+        const lastAckSeq = typeof data.lastProcessedInputSeq === 'number' ? data.lastProcessedInputSeq : -1;
+
+        // Bỏ các input đã được server xử lý
+        this.pendingInputs = this.pendingInputs.filter(inp => inp.seq > lastAckSeq);
+
+        // Re-simulate các input còn lại từ vị trí server
+        let reconciledX = data.x;
+        let reconciledY = data.y;
+        for (const inp of this.pendingInputs) {
+            const step = this.simulateMovementStep(reconciledX, reconciledY, inp.dx, inp.dy, inp.speed);
+            reconciledX = step.x;
+            reconciledY = step.y;
         }
+
+        this.predictedX = reconciledX;
+        this.predictedY = reconciledY;
+        this.lastServerX = data.x;
+        this.lastServerY = data.y;
         
         // Các thuộc tính khác vẫn cập nhật ngay lập tức
+        this.speed = data.speed || SharedConstants.TANK_BASE_SPEED;
         this.health = data.health;
         this.shield = data.shield;
         this.damage = data.damage;
@@ -261,69 +235,86 @@ class Tank {
         return { dx, dy };
     }
     
-    // Apply predicted movement ngay lập tức
-    applyPredictedMovement(dx, dy, speed = SharedConstants.TANK_BASE_SPEED) {
-        if (dx === 0 && dy === 0) return;
-        
-        // Nếu gameMap chưa khởi tạo, tạm thời bỏ qua collision check
+    // Tính một bước di chuyển (dùng cho prediction và replay)
+    simulateMovementStep(baseX, baseY, dx, dy, speed) {
+        if (dx === 0 && dy === 0) return { x: baseX, y: baseY };
+
+        // Nếu gameMap chưa khởi tạo, bỏ qua collision
         if (typeof gameMap === 'undefined') {
-            this.predictedX += dx * speed;
-            this.predictedY += dy * speed;
-            return;
+            return { x: baseX + dx * speed, y: baseY + dy * speed };
         }
-        
-        // Tính vị trí mới
-        let newX = this.predictedX + dx * speed;
-        let newY = this.predictedY + dy * speed;
-        
-        // Boundary check
+
+        let newX = baseX + dx * speed;
+        let newY = baseY + dy * speed;
+
+        // Boundary
         newX = Math.max(0, Math.min(newX, gameMap.width - this.width));
         newY = Math.max(0, Math.min(newY, gameMap.height - this.height));
-        
-        // Collision check với tường
+
+        // Collision check (giảm tải bằng filter gần vị trí mới)
         const testHitbox = {
             x: newX + SharedConstants.TANK_HITBOX_PADDING,
             y: newY + SharedConstants.TANK_HITBOX_PADDING,
             width: this.width - SharedConstants.TANK_HITBOX_PADDING * 2,
             height: this.height - SharedConstants.TANK_HITBOX_PADDING * 2
         };
-        
-        // Kiểm tra va chạm với tường gần đó
-        const nearbyWalls = gameMap.walls ? gameMap.walls.filter(wall => 
-            Math.abs(wall.x - newX) < 150 && Math.abs(wall.y - newY) < 150
-        ) : [];
-        
-        let hasCollision = false;
+
+        // Lấy tường gần bằng chunk index nếu có, fallback filter nhẹ
+        let nearbyWalls = [];
+        if (typeof gameMap.getWallsNearRect === 'function') {
+            nearbyWalls = gameMap.getWallsNearRect(testHitbox, 10);
+        } else if (gameMap.walls) {
+            nearbyWalls = gameMap.walls.filter(wall =>
+                Math.abs(wall.x - newX) < 150 && Math.abs(wall.y - newY) < 150
+            );
+        }
+
         for (let wall of nearbyWalls) {
             if (SharedUtils.isColliding(testHitbox, wall)) {
-                hasCollision = true;
-                break;
+                return { x: baseX, y: baseY }; // va chạm -> không di chuyển
             }
         }
-        
-        // Nếu không va chạm, update predicted position
-        if (!hasCollision) {
-            this.predictedX = newX;
-            this.predictedY = newY;
-        }
-        
-        // Lưu input vào pending queue để reconcile sau
-        this.pendingInputs.push({
-            seq: this.inputSequenceNumber++,
-            dx: dx,
-            dy: dy,
-            speed: speed,
-            timestamp: Date.now()
-        });
+
+        return { x: newX, y: newY };
     }
 
+    // Apply predicted movement ngay lập tức (tuỳ chọn push vào pending queue)
+    applyPredictedMovement(dx, dy, speed = SharedConstants.TANK_BASE_SPEED, options = {}) {
+        if (dx === 0 && dy === 0) return;
+
+        const { x, y } = this.simulateMovementStep(this.predictedX, this.predictedY, dx, dy, speed);
+        this.predictedX = x;
+        this.predictedY = y;
+
+        if (!options.skipQueue && typeof options.seq === 'number') {
+            this.pendingInputs.push({
+                seq: options.seq,
+                dx,
+                dy,
+                speed
+            });
+        }
+    }
+
+    // Update đơn giản cho tank địch (không prediction, chỉ lerp)
+    updateSimple() {
+        // Lerp từ vị trí hiện tại đến target (không prediction)
+        this.x += (this.targetX - this.x) * this.lerpFactor;
+        this.y += (this.targetY - this.y) * this.lerpFactor;
+        
+        // Snap nếu quá gần
+        if (Math.abs(this.targetX - this.x) < 0.5) this.x = this.targetX;
+        if (Math.abs(this.targetY - this.y) < 0.5) this.y = this.targetY;
+    }
+    
     // Hàm lerp để interpolate vị trí mỗi frame với Snap Logic
     update() {
         // === CONTINUOUS CLIENT-SIDE PREDICTION (Mỗi Frame) ===
         // Nếu có phím di chuyển được nhấn, predict liên tục
         const { dx, dy } = this.predictMovement(this.movementPriority);
+        const moveSpeed = this.speed || SharedConstants.TANK_BASE_SPEED;
         if (dx !== 0 || dy !== 0) {
-            this.applyPredictedMovement(dx, dy, SharedConstants.TANK_BASE_SPEED);
+            this.applyPredictedMovement(dx, dy, moveSpeed, { skipQueue: true });
             this.lastDx = dx;
             this.lastDy = dy;
         }
