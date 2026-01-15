@@ -7,6 +7,9 @@ const path = require('path');
 const SharedConstants = require('../shared/SharedConstants.js');
 const SharedUtils = require('../shared/SharedUtils.js');
 
+// Thời gian miễn sát thương sau khi bắt đầu ván (frames @60fps)
+const SPAWN_PROTECTION_FRAMES = 180; // 3 giây
+
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
@@ -70,6 +73,107 @@ function buildWallChunks(map) {
   map.wallChunks = chunks;
 }
 
+// Generate turrets (Static AI enemies)
+function generateTurrets(map) {
+  const turrets = [];
+  const count = SharedConstants.TURRET_COUNT;
+  const mapW = map.width;
+  const mapH = map.height;
+  const tileSize = SharedConstants.TILE_SIZE;
+  const safeTiles = SharedConstants.MAP_SAFE_ZONE_SIZE;
+  const safeSize = safeTiles * tileSize;
+  const margin = 50; // thêm khoảng cách để tránh sát mép spawn
+
+  // Safe zones quanh spawn người chơi (tránh đặt turret ở đây)
+  const safeZones = [
+    { x: 0, y: 0, width: safeSize + margin, height: safeSize + margin }, // Góc trên trái (P1)
+    { x: mapW - (safeSize + margin), y: mapH - (safeSize + margin), width: safeSize + margin, height: safeSize + margin } // Góc dưới phải (P2)
+  ];
+
+  const isInSafeZone = (x, y, size) => {
+    const rect = { x, y, width: size, height: size };
+    return safeZones.some(zone => SharedUtils.isColliding(rect, zone));
+  };
+  
+  // Chia map thành 4 zones, mỗi zone có 2 turrets
+  const zones = [
+    { x: 0, y: 0, w: mapW / 2, h: mapH / 2 },           // Top-left
+    { x: mapW / 2, y: 0, w: mapW / 2, h: mapH / 2 },    // Top-right
+    { x: 0, y: mapH / 2, w: mapW / 2, h: mapH / 2 },    // Bottom-left
+    { x: mapW / 2, y: mapH / 2, w: mapW / 2, h: mapH / 2 } // Bottom-right
+  ];
+  
+  let turretId = 0;
+  for (let zone of zones) {
+    // Spawn 2 turrets mỗi zone
+    for (let i = 0; i < 2; i++) {
+      let x, y, attempts = 0;
+      do {
+        x = zone.x + Math.random() * zone.w;
+        y = zone.y + Math.random() * zone.h;
+        attempts++;
+      } while (
+        attempts < 50 && (
+          isInSafeZone(x, y, SharedConstants.TURRET_SIZE) ||
+          map.walls.some(wall =>
+            SharedUtils.isColliding(
+              { x, y, width: SharedConstants.TURRET_SIZE, height: SharedConstants.TURRET_SIZE },
+              wall
+            )
+          )
+        )
+      );
+      
+      if (attempts < 50) {
+        turrets.push({
+          id: `turret_${turretId++}`,
+          x,
+          y,
+          width: SharedConstants.TURRET_SIZE,
+          height: SharedConstants.TURRET_SIZE,
+          health: SharedConstants.TURRET_MAX_HEALTH,
+          maxHealth: SharedConstants.TURRET_MAX_HEALTH,
+          damage: SharedConstants.TURRET_DAMAGE,
+          range: SharedConstants.TURRET_RANGE,
+          lastShootTime: 0,
+          shootCooldown: SharedConstants.TURRET_SHOOT_COOLDOWN
+        });
+      }
+    }
+  }
+  
+  return turrets;
+}
+
+// Create cluster fragments (6 bullets in 360 degrees)
+function createClusterFragments(game, bullet) {
+  const fragmentCount = SharedConstants.BUFF_VALUES.CLUSTER_FRAG_COUNT || 6;
+  const fragmentDamage = SharedConstants.BUFF_VALUES.CLUSTER_FRAG_DAMAGE || 10;
+  const angleStep = (Math.PI * 2) / fragmentCount;
+  
+  for (let i = 0; i < fragmentCount; i++) {
+    const angle = angleStep * i;
+    const dx = Math.cos(angle);
+    const dy = Math.sin(angle);
+    
+    game.bullets.push({
+      id: game.bulletSeq++,
+      x: bullet.x,
+      y: bullet.y,
+      dx: dx,
+      dy: dy,
+      speed: SharedConstants.BULLET_SPEED * 0.6, // Chậm hơn đạn thường
+      ownerId: bullet.ownerId,
+      damage: fragmentDamage,
+      type: 1, // Đạn thường
+      width: SharedConstants.BULLET_WIDTH * 0.7,
+      height: SharedConstants.BULLET_HEIGHT * 0.7,
+      isFragment: true,
+      lifespan: 30 // ~0.5 giây ở 60fps
+    });
+  }
+}
+
 // Get walls near a rectangle using chunk index
 function getWallsNear(map, rect) {
   const pad = 10;
@@ -88,13 +192,39 @@ function getWallsNear(map, rect) {
   return walls;
 }
 
+// Create cluster fragments (6 đạn con toả 360 độ)
+function createClusterFragments(game, bullet) {
+  const fragmentCount = SharedConstants.BUFF_VALUES.CLUSTER_FRAG_COUNT;
+  const fragmentDamage = SharedConstants.BUFF_VALUES.CLUSTER_FRAG_DAMAGE;
+  const angleStep = (Math.PI * 2) / fragmentCount;
+  
+  for (let i = 0; i < fragmentCount; i++) {
+    const angle = angleStep * i;
+    game.bullets.push({
+      id: game.bulletSeq++,
+      x: bullet.x,
+      y: bullet.y,
+      dx: Math.cos(angle),
+      dy: Math.sin(angle),
+      speed: SharedConstants.BULLET_SPEED * 0.7, // Chậm hơn đạn gốc
+      ownerId: bullet.ownerId,
+      damage: fragmentDamage,
+      type: 1, // Đạn con là đạn thường
+      width: SharedConstants.BULLET_WIDTH * 0.7,
+      height: SharedConstants.BULLET_HEIGHT * 0.7,
+      isFragment: true, // Đánh dấu là đạn con
+      lifespan: 30 // Chỉ sống 30 frames (~0.5s)
+    });
+  }
+}
+
 // Item spawning logic (simplified)
 let itemSpawnTimer = 0;
 function spawnItems(game) {
   itemSpawnTimer++;
   if (itemSpawnTimer >= SharedConstants.ITEM_SPAWN_INTERVAL) { // Spawn every 2 seconds (120 frames at 60fps)
     itemSpawnTimer = 0;
-    // Count current items (6 types)
+    // Count current items (6 types mới)
     let count = [0, 0, 0, 0, 0, 0];
     game.items.forEach(item => count[item.type - 1]++);
 
@@ -102,9 +232,9 @@ function spawnItems(game) {
       SharedConstants.ITEM_TARGETS.HEALTH,
       SharedConstants.ITEM_TARGETS.SPEED,
       SharedConstants.ITEM_TARGETS.SHIELD,
-      SharedConstants.ITEM_TARGETS.DAMAGE,
-      SharedConstants.ITEM_TARGETS.PIERCING,
-      SharedConstants.ITEM_TARGETS.EXPLOSIVE
+      SharedConstants.ITEM_TARGETS.FIRE_AMMO,
+      SharedConstants.ITEM_TARGETS.CLUSTER_AMMO,
+      SharedConstants.ITEM_TARGETS.STEALTH
     ];
     let totalMissing = 0;
     for (let i = 0; i < 6; i++) {
@@ -154,11 +284,13 @@ io.on('connection', (socket) => {
     }
     
     socket.join(roomId);
+    const gameMap = generateMap();
     games.set(roomId, {
       players: {},
       bullets: [],
       items: [],
-      map: generateMap(),
+      turrets: generateTurrets(gameMap), // Thêm turrets
+      map: gameMap,
       isGameOver: false,
       winner: null,
       bulletSeq: 1,
@@ -183,7 +315,7 @@ io.on('connection', (socket) => {
       lastDx: 0,
       lastDy: -1,
       angle: 0,
-      keys: { up: false, down: false, left: false, right: false, shoot: false },
+      keys: { up: false, down: false, left: false, right: false, shoot: false, priority: [] },
       canShoot: true,
       lastShootTime: 0,
       shootCooldown: SharedConstants.SHOOT_COOLDOWN,
@@ -193,10 +325,13 @@ io.on('connection', (socket) => {
       buffTimers: {
         speed: 0,
         shield: 0,
-        damage: 0,
-        piercing: 0,
-        explosive: 0
-      }
+        fireAmmo: 0,
+        clusterAmmo: 0,
+        stealth: 0
+      },
+      spawnProtection: 0,
+      isInvisible: false,
+      lastProcessedInputSeq: -1
     };
     
     socket.emit('roomCreated', { roomId, playerId: socket.id, isP1: true });
@@ -239,7 +374,7 @@ io.on('connection', (socket) => {
       lastDx: 0,
       lastDy: -1,
       angle: 0,
-      keys: { up: false, down: false, left: false, right: false, shoot: false },
+      keys: { up: false, down: false, left: false, right: false, shoot: false, priority: [] },
       canShoot: true,
       lastShootTime: 0,
       shootCooldown: SharedConstants.SHOOT_COOLDOWN,
@@ -249,10 +384,13 @@ io.on('connection', (socket) => {
       buffTimers: {
         speed: 0,
         shield: 0,
-        damage: 0,
-        piercing: 0,
-        explosive: 0
-      }
+        fireAmmo: 0,
+        clusterAmmo: 0,
+        stealth: 0
+      },
+      spawnProtection: 0,
+      isInvisible: false,
+      lastProcessedInputSeq: -1
     };
     
     socket.emit('joined', { playerId: socket.id, isP1: false });
@@ -261,37 +399,117 @@ io.on('connection', (socket) => {
     console.log(`Player joined room: ${roomId}`);
   });
 
-  // Bắt đầu game (chỉ host mới được)
+  // Bắt đầu game (chỉ host mới được) - TẠO MAP MỚI ỞỎY
   socket.on('startGame', (data) => {
     const { roomId } = data;
     const game = games.get(roomId);
     
-    if (!game || game.hostId !== socket.id) {
-      return; // Không phải host
+    if (!game) return;
+    const playerIds = Object.keys(game.players);
+    if (playerIds.length === 0) return;
+    // Nếu host đã rời, gán host mới là player đầu tiên
+    if (!game.players[game.hostId]) {
+      game.hostId = playerIds[0];
+      io.to(roomId).emit('hostChanged', { hostId: game.hostId });
+    }
+    if (game.hostId !== socket.id) {
+      return; // Không phải host hiện tại
     }
     
     if (Object.keys(game.players).length < 2) {
       return; // Chưa đủ người
     }
-    
+
+    // === TẠO MAP VÀ TURRETS MỚI TRƯỚC KHI BẮT ĐẦU ===
+    const newMap = generateMap();
+    game.map = newMap;
+    game.turrets = generateTurrets(newMap);
+
+    // Reset players về spawn point mới (map vừa tạo) và hồi đầy trạng thái
+    for (let [pid, player] of Object.entries(game.players)) {
+      if (player.id === 'p1') {
+        player.x = SharedConstants.PLAYER_P1_SPAWN.x;
+        player.y = SharedConstants.PLAYER_P1_SPAWN.y;
+      } else {
+        player.x = game.map.width - SharedConstants.PLAYER_P2_SPAWN_OFFSET.x;
+        player.y = game.map.height - SharedConstants.PLAYER_P2_SPAWN_OFFSET.y;
+      }
+
+      // Hồi máu, giáp, sát thương, đạn và di chuyển về mặc định
+      player.health = player.maxHealth;
+      player.shield = SharedConstants.PLAYER_BASE_SHIELD;
+      player.damage = player.defaultDamage ?? SharedConstants.PLAYER_BASE_DAMAGE;
+      player.bulletType = player.defaultBulletType ?? 1;
+      player.speed = player.defaultSpeed ?? SharedConstants.TANK_BASE_SPEED;
+      player.isInvisible = false;
+      delete player.burnEffect;
+
+      // Reset buff timers
+      player.buffTimers = {
+        speed: 0,
+        shield: 0,
+        fireAmmo: 0,
+        clusterAmmo: 0,
+        stealth: 0
+      };
+
+      // Miễn sát thương vài giây đầu
+      player.spawnProtection = SPAWN_PROTECTION_FRAMES;
+
+      // Reset input / cooldowns
+      player.keys = { up: false, down: false, left: false, right: false, shoot: false, priority: [] };
+      player.canShoot = true;
+      player.lastShootTime = 0;
+      player.lastDx = 0;
+      player.lastDy = -1;
+    }
+
+    game.bullets = [];
+    game.items = [];
+    game.bulletSeq = 1;
+    game.isGameOver = false;
+    game.winner = null;
     game.isPlaying = true;
+    itemSpawnTimer = 0;
+
     io.to(roomId).emit('gameStarted');
     io.to(roomId).emit('gameState', game);
     console.log(`Game started in room: ${roomId}`);
   });
+
+
 
   // Rời phòng
   socket.on('leaveRoom', (data) => {
     const { roomId } = data;
     const game = games.get(roomId);
     if (game) {
+      const wasHost = game.hostId === socket.id;
+      
       delete game.players[socket.id];
       socket.leave(roomId);
       
-      // Nếu phòng rỗng hoặc host rời thì xóa phòng
-      if (Object.keys(game.players).length === 0 || game.hostId === socket.id) {
+      const remaining = Object.keys(game.players);
+      if (remaining.length === 0) {
         games.delete(roomId);
         console.log(`Room deleted: ${roomId}`);
+      } else {
+        // Nếu là host, kick tất cả thành viên còn lại về lobby
+        if (wasHost) {
+          io.to(roomId).emit('hostLeft');
+          remaining.forEach(socketId => {
+            io.sockets.sockets.get(socketId)?.leave(roomId);
+          });
+          games.delete(roomId);
+          console.log(`Host left room ${roomId}, all players kicked out`);
+        } else if (game.isPlaying && !game.isGameOver) {
+          // Nếu game đang chơi, người còn lại thắng
+          game.isGameOver = true;
+          const remainingPlayer = game.players[remaining[0]];
+          game.winner = remainingPlayer.id;
+          io.to(roomId).emit('gameState', game);
+          console.log(`Player left room during game. Winner: ${game.winner}`);
+        }
       }
     }
   });
@@ -302,18 +520,43 @@ io.on('connection', (socket) => {
     const game = games.get(roomId);
     if (game && game.players[socket.id]) {
       const player = game.players[socket.id];
-      player.keys = input;
-      if (!input.shoot) player.canShoot = true;
+      const { seq, ...keyState } = input || {};
+      player.keys = keyState;
+      player.lastProcessedInputSeq = typeof seq === 'number' ? seq : (player.lastProcessedInputSeq ?? -1);
+      if (!keyState.shoot) player.canShoot = true;
     }
   });
 
   socket.on('disconnect', () => {
     for (let [roomId, game] of games) {
-      delete game.players[socket.id];
-      // Cleanup room if empty
-      if (Object.keys(game.players).length === 0) {
-        console.log(`Deleted empty room: ${roomId}`);
-        games.delete(roomId);
+      if (game.players[socket.id]) {
+        const wasHost = game.hostId === socket.id;
+        
+        delete game.players[socket.id];
+        const remaining = Object.keys(game.players);
+        
+        if (remaining.length === 0) {
+          console.log(`Deleted empty room: ${roomId}`);
+          games.delete(roomId);
+        } else {
+          // Nếu là host disconnect, kick tất cả thành viên về lobby
+          if (wasHost) {
+            io.to(roomId).emit('hostLeft');
+            remaining.forEach(socketId => {
+              io.sockets.sockets.get(socketId)?.leave(roomId);
+            });
+            games.delete(roomId);
+            console.log(`Host disconnected from room ${roomId}, all players kicked out`);
+          } else if (game.isPlaying && !game.isGameOver) {
+            // Nếu game đang chơi, người còn lại thắng
+            game.isGameOver = true;
+            const remainingPlayer = game.players[remaining[0]];
+            game.winner = remainingPlayer.id;
+            io.to(roomId).emit('gameState', game);
+            console.log(`Player disconnected during game. Winner: ${game.winner}`);
+          }
+        }
+        break;
       }
     }
   });
@@ -404,6 +647,12 @@ const physicsLoopId = setInterval(() => {
         // Shooting logic (với cooldown)
         const now = Date.now();
         if (player.keys.shoot && player.canShoot && (now - player.lastShootTime >= player.shootCooldown)) {
+            // Bắn súng -> Mất tàng hình
+            if (player.isInvisible) {
+              player.isInvisible = false;
+              player.buffTimers.stealth = 0;
+            }
+            
             // Tính tâm xe tăng
             const centerX = player.x + player.width / 2;
             const centerY = player.y + player.height / 2;
@@ -443,10 +692,71 @@ const physicsLoopId = setInterval(() => {
         }
       }
 
+      // === TURRET AI LOGIC ===
+      const now = Date.now();
+      game.turrets.forEach(turret => {
+        if (turret.health <= 0) return; // Turret đã chết
+        
+        // Tìm người chơi gần nhất trong tầm bắn
+        let closestPlayer = null;
+        let closestDist = turret.range + 1;
+        
+        for (let [id, player] of Object.entries(game.players)) {
+          if (player.health <= 0) continue;
+          
+          const dx = player.x + player.width / 2 - (turret.x + turret.width / 2);
+          const dy = player.y + player.height / 2 - (turret.y + turret.height / 2);
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          
+          if (dist < closestDist) {
+            closestDist = dist;
+            closestPlayer = player;
+          }
+        }
+        
+        // Nếu có target và đủ cooldown -> bắn
+        if (closestPlayer && now - turret.lastShootTime >= turret.shootCooldown) {
+          const centerX = turret.x + turret.width / 2;
+          const centerY = turret.y + turret.height / 2;
+          const targetX = closestPlayer.x + closestPlayer.width / 2;
+          const targetY = closestPlayer.y + closestPlayer.height / 2;
+          
+          const dx = targetX - centerX;
+          const dy = targetY - centerY;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          
+          game.bullets.push({
+            id: game.bulletSeq++,
+            x: centerX,
+            y: centerY,
+            dx: dx / dist,
+            dy: dy / dist,
+            speed: SharedConstants.BULLET_SPEED,
+            ownerId: turret.id,
+            damage: turret.damage,
+            type: 1, // Đạn thường
+            width: SharedConstants.BULLET_WIDTH,
+            height: SharedConstants.BULLET_HEIGHT
+          });
+          
+          turret.lastShootTime = now;
+        }
+      });
+
       // Update bullets
       game.bullets.forEach(bullet => {
         bullet.x += bullet.dx * bullet.speed;
         bullet.y += bullet.dy * bullet.speed;
+        
+        // Fragment bullets: giảm lifespan
+        if (bullet.isFragment && bullet.lifespan !== undefined) {
+          bullet.lifespan--;
+          if (bullet.lifespan <= 0) {
+            bullet.markedForDeletion = true;
+          }
+        }
+        
+        // Boundary check
         if (bullet.x < 0 || bullet.x > game.map.width || bullet.y < 0 || bullet.y > game.map.height) {
           bullet.markedForDeletion = true;
         }
@@ -458,16 +768,57 @@ const physicsLoopId = setInterval(() => {
         const nearWalls = getWallsNear(game.map, bullet);
         for (let wall of nearWalls) {
           if (bullet.type !== 2 && SharedUtils.isColliding(bullet, wall)) {
+            // Cluster Ammo: Nổ ra đạn con khi chạm tường
+            if (bullet.type === 5) {
+              createClusterFragments(game, bullet);
+            }
             bullet.markedForDeletion = true;
             break;
           }
         }
-        // Players
+        
+        // Players (từ turrets hoặc từ players khác)
         for (let [id, player] of Object.entries(game.players)) {
           if (bullet.ownerId !== player.id && SharedUtils.isColliding(bullet, player)) {
+            // Spawn protection: bỏ qua sát thương trong vài giây đầu
+            if (player.spawnProtection && player.spawnProtection > 0) {
+              bullet.markedForDeletion = true;
+              break;
+            }
+            // Damage cơ bản
             player.health -= bullet.damage - player.shield;
-            if (bullet.type === 3) player.health -= SharedConstants.BUFF_VALUES.EXPLOSIVE_BONUS;
+            
+            // Fire Ammo: Gây burn effect
+            if (bullet.type === 4) {
+              player.burnEffect = {
+                damage: SharedConstants.BUFF_VALUES.FIRE_DOT_DAMAGE,
+                duration: SharedConstants.BUFF_VALUES.FIRE_DOT_DURATION
+              };
+            }
+            
+            // Cluster Ammo: Nổ ra đạn con
+            if (bullet.type === 5) {
+              createClusterFragments(game, bullet);
+            }
+            
             bullet.markedForDeletion = true;
+          }
+        }
+        
+        // Turrets (players có thể bắn turrets)
+        if (!bullet.ownerId.startsWith('turret_')) {
+          for (let turret of game.turrets) {
+            if (turret.health > 0 && SharedUtils.isColliding(bullet, turret)) {
+              turret.health -= bullet.damage;
+              
+              // Cluster Ammo: Nổ khi trúng turret
+              if (bullet.type === 5) {
+                createClusterFragments(game, bullet);
+              }
+              
+              bullet.markedForDeletion = true;
+              break;
+            }
           }
         }
       });
@@ -478,32 +829,32 @@ const physicsLoopId = setInterval(() => {
           const item = game.items[i];
           const itemRect = { x: item.x, y: item.y, width: SharedConstants.ITEM_SIZE, height: SharedConstants.ITEM_SIZE };
           if (SharedUtils.isColliding(player, itemRect)) {
-            // Apply item effect based on type (6 active items)
+            // Apply item effect based on type (6 types mới)
             switch(item.type) {
               case 1: // Health
                 player.health = Math.min(player.maxHealth, player.health + SharedConstants.BUFF_VALUES.HEALTH_RESTORE);
                 break;
               case 2: // Speed boost (10s)
-                player.buffTimers.speed = Math.max(player.buffTimers.speed, SharedConstants.BUFF_DURATION.SPEED); // refresh/extend
+                player.buffTimers.speed = Math.max(player.buffTimers.speed, SharedConstants.BUFF_DURATION.SPEED);
                 player.speed = player.defaultSpeed + SharedConstants.BUFF_VALUES.SPEED_BOOST;
                 break;
               case 3: // Shield (15s)
                 player.shield = SharedConstants.BUFF_VALUES.SHIELD_VALUE;
                 player.buffTimers.shield = SharedConstants.BUFF_DURATION.SHIELD;
                 break;
-              case 4: // Damage boost (10s)
-                player.damage = player.defaultDamage + SharedConstants.BUFF_VALUES.DAMAGE_BOOST;
-                player.buffTimers.damage = SharedConstants.BUFF_DURATION.DAMAGE;
+              case 4: // Fire Ammo (12s)
+                player.bulletType = 4;
+                player.buffTimers.fireAmmo = SharedConstants.BUFF_DURATION.FIRE_AMMO;
+                player.buffTimers.clusterAmmo = 0; // Cancel cluster
                 break;
-              case 5: // Piercing bullets (12s)
-                player.bulletType = 2;
-                player.buffTimers.piercing = SharedConstants.BUFF_DURATION.PIERCING;
-                player.buffTimers.explosive = 0; // cancel explosive
+              case 5: // Cluster Ammo (12s)
+                player.bulletType = 5;
+                player.buffTimers.clusterAmmo = SharedConstants.BUFF_DURATION.CLUSTER_AMMO;
+                player.buffTimers.fireAmmo = 0; // Cancel fire
                 break;
-              case 6: // Explosive bullets (12s)
-                player.bulletType = 3;
-                player.buffTimers.explosive = SharedConstants.BUFF_DURATION.EXPLOSIVE;
-                player.buffTimers.piercing = 0; // cancel piercing
+              case 6: // Stealth (10s)
+                player.isInvisible = true;
+                player.buffTimers.stealth = SharedConstants.BUFF_DURATION.STEALTH;
                 break;
             }
             // Remove item after pickup
@@ -514,7 +865,7 @@ const physicsLoopId = setInterval(() => {
 
       // Update buff timers and reset stats when expired
       for (let [id, player] of Object.entries(game.players)) {
-        // Speed buff (keep boosted speed while active)
+        // Speed buff
         if (player.buffTimers.speed > 0) {
           player.speed = player.defaultSpeed + SharedConstants.BUFF_VALUES.SPEED_BOOST;
           player.buffTimers.speed--;
@@ -529,25 +880,45 @@ const physicsLoopId = setInterval(() => {
             player.shield = 0;
           }
         }
-        // Damage buff
-        if (player.buffTimers.damage > 0) {
-          player.buffTimers.damage--;
-          if (player.buffTimers.damage === 0) {
-            player.damage = player.defaultDamage;
-          }
-        }
-        // Piercing buff
-        if (player.buffTimers.piercing > 0) {
-          player.buffTimers.piercing--;
-          if (player.buffTimers.piercing === 0) {
+        // Fire Ammo buff
+        if (player.buffTimers.fireAmmo > 0) {
+          player.buffTimers.fireAmmo--;
+          if (player.buffTimers.fireAmmo === 0) {
             player.bulletType = player.defaultBulletType;
           }
         }
-        // Explosive buff
-        if (player.buffTimers.explosive > 0) {
-          player.buffTimers.explosive--;
-          if (player.buffTimers.explosive === 0) {
+        // Cluster Ammo buff
+        if (player.buffTimers.clusterAmmo > 0) {
+          player.buffTimers.clusterAmmo--;
+          if (player.buffTimers.clusterAmmo === 0) {
             player.bulletType = player.defaultBulletType;
+          }
+        }
+        // Stealth buff
+        if (player.buffTimers.stealth > 0) {
+          player.buffTimers.stealth--;
+          if (player.buffTimers.stealth === 0) {
+            player.isInvisible = false;
+          }
+        }
+
+        // Giảm dần spawn protection (miễn sát thương)
+        if (player.spawnProtection && player.spawnProtection > 0) {
+          player.spawnProtection--;
+        }
+        
+        // Burn effect (Fire DOT)
+        if (player.burnEffect) {
+          // Nếu đang trong spawn protection thì không trừ máu
+          if (player.spawnProtection && player.spawnProtection > 0) {
+            player.burnEffect.duration--;
+            if (player.burnEffect.duration <= 0) delete player.burnEffect;
+          } else {
+          player.health -= player.burnEffect.damage;
+          player.burnEffect.duration--;
+          if (player.burnEffect.duration <= 0) {
+            delete player.burnEffect;
+          }
           }
         }
       }
@@ -629,11 +1000,16 @@ function buildViewStateFor(game, player) {
     i.x + 30 >= rect.x && i.x <= rect.x + rect.width &&
     i.y + 30 >= rect.y && i.y <= rect.y + rect.height
   ));
+  
+  // Turrets trong viewport (luôn gửi toàn bộ để client vẽ mini-map)
+  const turrets = game.turrets;
 
   return {
     players: game.players,
+    playerData: game.playerData,
     bullets,
     items,
+    turrets,
     map: { width: game.map.width, height: game.map.height },
     isGameOver: game.isGameOver,
     winner: game.winner
