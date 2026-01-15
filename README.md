@@ -32,7 +32,11 @@ Game bắn xe tăng multiplayer online với hệ thống phòng chơi.
 - Hàng chờ người chơi
 - Host có quyền bắt đầu trận đấu
 - Hệ thống buff items (tốc độ, giáp, sát thương...)
-- Nhiều loại đạn (thường, xuyên tường, nổ)
+- Nhiều loại đạn (thường, lửa DOT, cluster bomb)
+- Mini-map hiển thị vị trí các đối tượng
+- Turrets (trụ súng) tự động bắn người chơi
+- Spawn protection 3 giây khi bắt đầu trận đấu
+- Hiển thị buff timer với thanh tiến trình
 - Client-side prediction cho gameplay mượt mà
 - Optimized network (30fps updates, 60fps physics)
 
