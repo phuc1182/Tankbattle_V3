@@ -703,6 +703,7 @@ const physicsLoopId = setInterval(() => {
         
         for (let [id, player] of Object.entries(game.players)) {
           if (player.health <= 0) continue;
+          if (player.isInvisible) continue; // Bỏ qua người chơi bị tàng hình
           
           const dx = player.x + player.width / 2 - (turret.x + turret.width / 2);
           const dy = player.y + player.height / 2 - (turret.y + turret.height / 2);
@@ -782,6 +783,11 @@ const physicsLoopId = setInterval(() => {
           if (bullet.ownerId !== player.id && SharedUtils.isColliding(bullet, player)) {
             // Spawn protection: bỏ qua sát thương trong vài giây đầu
             if (player.spawnProtection && player.spawnProtection > 0) {
+              bullet.markedForDeletion = true;
+              break;
+            }
+            // Stealth: Bỏ qua sát thương khi bị tàng hình
+            if (player.isInvisible) {
               bullet.markedForDeletion = true;
               break;
             }
@@ -909,8 +915,8 @@ const physicsLoopId = setInterval(() => {
         
         // Burn effect (Fire DOT)
         if (player.burnEffect) {
-          // Nếu đang trong spawn protection thì không trừ máu
-          if (player.spawnProtection && player.spawnProtection > 0) {
+          // Nếu đang trong spawn protection hoặc tàng hình thì không trừ máu
+          if ((player.spawnProtection && player.spawnProtection > 0) || player.isInvisible) {
             player.burnEffect.duration--;
             if (player.burnEffect.duration <= 0) delete player.burnEffect;
           } else {
