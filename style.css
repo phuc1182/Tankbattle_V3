@@ -154,6 +154,19 @@ canvas {
     transform: scale(1.05) !important;
 }
 
+.danger-btn {
+    background-color: #e74c3c !important;
+    color: white !important;
+    border: 2px solid #ff6b5a !important;
+    font-size: 18px !important;
+    padding: 12px 25px !important;
+}
+
+.danger-btn:hover {
+    background-color: #ff6b5a !important;
+    transform: scale(1.05) !important;
+}
+
 /* --- WAITING ROOM --- */
 #waiting-layer {
     position: absolute;
@@ -275,6 +288,12 @@ canvas {
     font-style: italic;
     margin: 20px 0;
     animation: pulse 2s infinite;
+}
+
+#startGameBtn,
+#leaveRoomBtn {
+    margin-top: 12px;
+    min-width: 220px;
 }
 
 @keyframes pulse {

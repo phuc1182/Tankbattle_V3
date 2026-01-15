@@ -62,19 +62,4 @@ class Bullet {
         }
     }
 
-    // Static method để vẽ raw data từ server (backward compatibility)
-    static drawRaw(ctx, bulletData) {
-        const image = IMAGES.bullet;
-        if (image) {
-            ctx.drawImage(image, bulletData.x - 8, bulletData.y - 8, 16, 16);
-        } else {
-            ctx.beginPath();
-            ctx.arc(bulletData.x, bulletData.y, 5, 0, Math.PI * 2);
-            if (bulletData.type === 1) ctx.fillStyle = "orange";
-            else if (bulletData.type === 2) ctx.fillStyle = "red";
-            else if (bulletData.type === 3) ctx.fillStyle = "yellow";
-            ctx.fill();
-            ctx.closePath();
-        }
-    }
 }

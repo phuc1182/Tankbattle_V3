@@ -191,6 +191,10 @@ socket.on('hostLeft', () => {
     lobbyLayer.style.display = 'flex';
     window.roomId = null;
     roomIdInput.value = '';
+    if (typeof window.stopRenderLoop === 'function') {
+        window.stopRenderLoop();
+    }
+    window.gameState = null;
 });
 
 socket.on('joined', (data) => {
@@ -205,9 +209,109 @@ socket.on('gameState', (gameState) => {
     window.initGame();
 });
 
+// Đảm bảo initGame được gọi ngay khi server báo start game
+socket.on('gameStarted', () => {
+    if (window.gameState) {
+        window.initGame();
+    }
+});
+
 socket.on('updateState', (gameState) => {
     window.gameState = gameState;
     // XÓA window.renderGame() vì renderGame đang chạy trong vòng lặp requestAnimationFrame bên Game.js
+});
+
+// Handler cho "Play Again" - khi server reset game
+socket.on('gameReset', (gameState) => {
+    console.log('Game reset received, restarting...');
+    window.gameState = gameState;
+    const gameOverLayer = document.getElementById('game-over-layer');
+    gameOverLayer.style.display = 'none';
+    // Khởi động game lại mà không cần reload
+    window.initGame();
+});
+
+// Khi người chơi 2 từ chối chơi lại -> đưa cả 2 về lobby
+socket.on('resetGameDeclined', () => {
+    alert('Người chơi 2 không đồng ý chơi lại. Quay về màn hình chính.');
+    const gameOverLayer = document.getElementById('game-over-layer');
+    gameOverLayer.style.display = 'none';
+    waitingLayer.style.display = 'none';
+    lobbyLayer.style.display = 'flex';
+    window.roomId = null;
+    roomIdInput.value = '';
+    if (typeof window.stopRenderLoop === 'function') {
+        window.stopRenderLoop();
+    }
+    window.gameState = null;
+});
+
+// Handler khi host yêu cầu chơi lại (dành cho player 2)
+socket.on('resetGameRequest', () => {
+    console.log('[Client] Received resetGameRequest from host');
+
+    // Nếu đã có dialog thì không tạo lại
+    if (document.getElementById('reset-game-dialog')) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'reset-game-dialog';
+    overlay.style.position = 'fixed';
+    overlay.style.top = '0';
+    overlay.style.left = '0';
+    overlay.style.width = '100%';
+    overlay.style.height = '100%';
+    overlay.style.background = 'rgba(0, 0, 0, 0.6)';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    overlay.style.zIndex = '9999';
+
+    const box = document.createElement('div');
+    box.style.background = '#111';
+    box.style.color = '#fff';
+    box.style.padding = '20px 24px';
+    box.style.borderRadius = '10px';
+    box.style.textAlign = 'center';
+    box.style.minWidth = '280px';
+    box.style.boxShadow = '0 10px 30px rgba(0,0,0,0.4)';
+
+    const text = document.createElement('div');
+    text.textContent = 'Người chơi 1 muốn chơi lại. Bạn có đồng ý không?';
+    text.style.marginBottom = '16px';
+
+    const btnRow = document.createElement('div');
+    btnRow.style.display = 'flex';
+    btnRow.style.gap = '10px';
+    btnRow.style.justifyContent = 'center';
+
+    const yesBtn = document.createElement('button');
+    yesBtn.textContent = 'Đồng ý';
+    yesBtn.className = 'primary-btn';
+
+    const noBtn = document.createElement('button');
+    noBtn.textContent = 'Từ chối';
+    noBtn.className = 'secondary-btn';
+
+    const sendResponse = (accept) => {
+        if (window.socket && window.roomId) {
+            socket.emit('respondResetGame', {
+                roomId: window.roomId,
+                accept
+            });
+            console.log('[Client] Sent respondResetGame to server, accept:', accept);
+        }
+        overlay.remove();
+    };
+
+    yesBtn.addEventListener('click', () => sendResponse(true));
+    noBtn.addEventListener('click', () => sendResponse(false));
+
+    btnRow.appendChild(yesBtn);
+    btnRow.appendChild(noBtn);
+    box.appendChild(text);
+    box.appendChild(btnRow);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
 });
 
 // Loading flow: images -> sounds -> show lobby

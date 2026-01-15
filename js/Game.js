@@ -8,6 +8,7 @@ let turrets = []; // Turrets từ server
 let particleSystem;
 let isGameOver = false;
 let isRenderLoopRunning = false;
+let renderLoopId = null;
 let itemNotifications = []; // Lưu notifications khi nhặt item
 
 // DOM elements
@@ -23,6 +24,7 @@ function initGame() {
     items = [];
     turrets = [];
     isGameOver = false;
+    window.isGameOver = false;
 
     // Tạo Map từ server
     gameMap = new GameMap(window.gameState.map.width, window.gameState.map.height, SharedConstants.TILE_SIZE);
@@ -61,10 +63,23 @@ function initGame() {
         window.audioManager.playMusic('sounds/bgmusic.mp3');
     }
 
-    // Start rendering (chỉ khởi động một lần)
-    if (!isRenderLoopRunning) {
-        isRenderLoopRunning = true;
-        window.renderGame();
+    // Start rendering (đảm bảo chỉ có một vòng lặp)
+    if (renderLoopId !== null) {
+        cancelAnimationFrame(renderLoopId);
+        renderLoopId = null;
+    }
+    isRenderLoopRunning = true;
+    window.renderGame();
+}
+
+// Dừng render loop khi rời phòng hoặc về lobby
+function stopRenderLoop() {
+    isGameOver = true;
+    window.isGameOver = true;
+    isRenderLoopRunning = false;
+    if (renderLoopId !== null) {
+        cancelAnimationFrame(renderLoopId);
+        renderLoopId = null;
     }
 }
 
@@ -228,7 +243,7 @@ function renderGame() {
     });
     itemNotifications = itemNotifications.filter(notif => notif.time < notif.duration);
 
-    requestAnimationFrame(renderGame);
+    renderLoopId = requestAnimationFrame(renderGame);
 }
 
 // Hàm gọi khi có người hết máu
@@ -237,8 +252,13 @@ function endGame(winnerId) {
     if (gameOverLayer.style.display === 'flex') return;
     
     isGameOver = true;
+    window.isGameOver = true;
     // Cho phép render loop khởi động lại khi restart
     isRenderLoopRunning = false;
+    if (renderLoopId !== null) {
+        cancelAnimationFrame(renderLoopId);
+        renderLoopId = null;
+    }
     
     // Dừng nhạc nền
     if (window.audioManager) window.audioManager.stopMusic();
@@ -254,13 +274,40 @@ function endGame(winnerId) {
         winnerText.style.color = "#e74c3c";
     }
     
-    // Tự động rời phòng và reload sau 3 giây
-    setTimeout(() => {
-        if (window.socket && window.roomId) {
-            window.socket.emit('leaveRoom', { roomId: window.roomId });
+    // Nếu là host, hiển thị nút "Play Again" để chơi lại mà không cần tạo phòng mới
+    if (window.isHost) {
+        // Xóa nút cũ nếu tồn tại (tránh duplicate)
+        const existingBtn = document.getElementById('playAgainBtn');
+        if (existingBtn) {
+            existingBtn.remove();
         }
-        location.reload();
-    }, 3000);
+        
+        const playAgainBtn = document.createElement('button');
+        playAgainBtn.id = 'playAgainBtn';
+        playAgainBtn.className = 'primary-btn';
+        playAgainBtn.textContent = 'CHƠI LẠI';
+        playAgainBtn.style.marginTop = '20px';
+        playAgainBtn.addEventListener('click', () => {
+            console.log('[Client] Host clicked Play Again button');
+            console.log('[Client] roomId:', window.roomId);
+            console.log('[Client] isHost:', window.isHost);
+            
+            // Gửi yêu cầu chơi lại tới server (cần xác nhận từ player 2)
+            if (window.socket && window.roomId) {
+                window.socket.emit('requestResetGame', { roomId: window.roomId });
+                console.log('[Client] Sent requestResetGame to server');
+                
+                // Hiển thị thông báo đang chờ
+                playAgainBtn.disabled = true;
+                playAgainBtn.textContent = 'ĐANG CHỜ NGƯỜI CHƠI 2...';
+            } else {
+                console.error('[Client] Cannot send requestResetGame - socket or roomId missing');
+            }
+        });
+        gameOverLayer.querySelector('.btn-group').insertBefore(playAgainBtn, homeBtn);
+    }
+    
+    // Nút MÀN HÌNH CHÍNH: Rời phòng và quay về lobby (không reload)
     
     console.log('Game Over! Winner:', winnerId);
 }
@@ -269,6 +316,7 @@ function endGame(winnerId) {
 window.initGame = initGame;
 window.renderGame = renderGame;
 window.endGame = endGame;
+window.stopRenderLoop = stopRenderLoop;
 window.gameMap = gameMap;
 window.tank1 = tank1;
 window.tank2 = tank2;

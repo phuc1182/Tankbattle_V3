@@ -153,7 +153,6 @@ TankBattle_V3/
 │   └── SharedUtils.js         # 🆕 Utility functions dùng chung
 │
 ├── js/
-│   ├── Config.js              # ✏️ ĐÃ CẬP NHẬT - Chỉ giữ controls
 │   ├── Utils.js               # ✏️ ĐÃ CẬP NHẬT - Ghi chú dùng SharedUtils
 │   ├── Tank.js                # ✏️ ĐÃ CẬP NHẬT - Thêm Snap Logic
 │   ├── Bullet.js              # ✏️ ĐÃ CẬP NHẬT - Dùng SharedConstants

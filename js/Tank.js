@@ -86,6 +86,9 @@ class Tank {
     };
     
     window.addEventListener('keydown', (e) => {
+        // Không nhận input khi game over
+        if (window.isGameOver) return;
+        
         const oldKeys = JSON.stringify(this.keys);
         const wasShoot = this.keys.shoot;
         
@@ -131,6 +134,9 @@ class Tank {
         }
     });
     window.addEventListener('keyup', (e) => {
+        // Không nhận input khi game over
+        if (window.isGameOver) return;
+        
         const oldKeys = JSON.stringify(this.keys);
         
         // Movement keys với priority tracking

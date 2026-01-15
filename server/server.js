@@ -477,9 +477,213 @@ io.on('connection', (socket) => {
     console.log(`Game started in room: ${roomId}`);
   });
 
+  // Reset game để chơi lại mà không cần rời phòng (chỉ host mới có quyền)
+  socket.on('resetGame', (data) => {
+    const { roomId } = data;
+    const game = games.get(roomId);
+    
+    if (!game) return;
+    
+    // Chỉ host mới được reset
+    if (game.hostId !== socket.id) {
+      return;
+    }
 
+    // === RESET GAME STATE GIỐNG NHƯ startGame ===
+    const newMap = generateMap();
+    game.map = newMap;
+    game.turrets = generateTurrets(newMap);
 
-  // Rời phòng
+    // Reset players về spawn point mới
+    for (let [pid, player] of Object.entries(game.players)) {
+      if (player.id === 'p1') {
+        player.x = SharedConstants.PLAYER_P1_SPAWN.x;
+        player.y = SharedConstants.PLAYER_P1_SPAWN.y;
+      } else {
+        player.x = game.map.width - SharedConstants.PLAYER_P2_SPAWN_OFFSET.x;
+        player.y = game.map.height - SharedConstants.PLAYER_P2_SPAWN_OFFSET.y;
+      }
+
+      // Hồi máu, giáp, sát thương, đạn và di chuyển về mặc định
+      player.health = player.maxHealth;
+      player.shield = SharedConstants.PLAYER_BASE_SHIELD;
+      player.damage = player.defaultDamage ?? SharedConstants.PLAYER_BASE_DAMAGE;
+      player.bulletType = player.defaultBulletType ?? 1;
+      player.speed = player.defaultSpeed ?? SharedConstants.TANK_BASE_SPEED;
+      player.isInvisible = false;
+      delete player.burnEffect;
+
+      // Reset buff timers
+      player.buffTimers = {
+        speed: 0,
+        shield: 0,
+        fireAmmo: 0,
+        clusterAmmo: 0,
+        stealth: 0
+      };
+
+      // Miễn sát thương vài giây đầu
+      player.spawnProtection = SPAWN_PROTECTION_FRAMES;
+
+      // Reset input / cooldowns
+      player.keys = { up: false, down: false, left: false, right: false, shoot: false, priority: [] };
+      player.canShoot = true;
+      player.lastShootTime = 0;
+      player.lastDx = 0;
+      player.lastDy = -1;
+    }
+
+    game.bullets = [];
+    game.items = [];
+    game.bulletSeq = 1;
+    game.isGameOver = false;
+    game.winner = null;
+    game.isPlaying = true;
+    itemSpawnTimer = 0;
+
+    // Gửi signal 'gameReset' cho cả 2 player
+    io.to(roomId).emit('gameReset', game);
+    console.log(`Game reset in room: ${roomId}`);
+  });
+
+  // Yêu cầu chơi lại (host gửi, cần xác nhận từ player 2)
+  socket.on('requestResetGame', (data) => {
+    const { roomId } = data;
+    const game = games.get(roomId);
+    
+    console.log(`[requestResetGame] Received from ${socket.id} for room ${roomId}`);
+    
+    if (!game) {
+      console.log(`[requestResetGame] Game not found for room ${roomId}`);
+      return;
+    }
+
+    // Nếu hostId không còn hợp lệ, gán lại host
+    if (!game.players[game.hostId]) {
+      const playerIds = Object.keys(game.players);
+      if (playerIds.length === 0) return;
+      game.hostId = playerIds[0];
+      io.to(roomId).emit('hostChanged', { hostId: game.hostId });
+    }
+    
+    // Chỉ host mới được gửi yêu cầu
+    if (game.hostId !== socket.id) {
+      console.log(`[requestResetGame] Socket ${socket.id} is not host (host is ${game.hostId})`);
+      return;
+    }
+
+    // Đánh dấu đang chờ phản hồi
+    game.resetRequestPending = true;
+    game.resetRequestFrom = socket.id;
+    game.resetRequestTo = null;
+
+    // Tìm player 2 (không phải host)
+    const player2Id = Object.keys(game.players).find(pid => pid !== game.hostId);
+    
+    console.log(`[requestResetGame] Player 2 ID: ${player2Id}`);
+    console.log(`[requestResetGame] All players:`, Object.keys(game.players));
+    
+    if (!player2Id) {
+      // Không có player 2, reset luôn
+      console.log(`[requestResetGame] No player 2 found, resetting game`);
+      socket.emit('gameReset', game);
+      game.resetRequestPending = false;
+      game.resetRequestFrom = null;
+      return;
+    }
+
+    // Gửi yêu cầu xác nhận tới player 2
+    game.resetRequestTo = player2Id;
+    io.to(player2Id).emit('resetGameRequest');
+    console.log(`[requestResetGame] Reset game request sent to player 2: ${player2Id} in room: ${roomId}`);
+  });
+
+  // Phản hồi từ player 2 về yêu cầu chơi lại
+  socket.on('respondResetGame', (data) => {
+    const { roomId, accept } = data;
+    const game = games.get(roomId);
+    
+    console.log(`[respondResetGame] Received from ${socket.id} for room ${roomId}, accept: ${accept}`);
+    
+    if (!game) {
+      console.log(`[respondResetGame] Game not found for room ${roomId}`);
+      return;
+    }
+
+    // Chỉ xử lý khi đang chờ phản hồi và đúng người được hỏi
+    if (!game.resetRequestPending || socket.id !== game.resetRequestTo) {
+      console.log(`[respondResetGame] Ignored (pending: ${game.resetRequestPending}, to: ${game.resetRequestTo})`);
+      return;
+    }
+
+    if (accept) {
+      // Player 2 đồng ý → reset game
+      const newMap = generateMap();
+      game.map = newMap;
+      game.turrets = generateTurrets(newMap);
+
+      // Reset players về spawn point mới
+      for (let [pid, player] of Object.entries(game.players)) {
+        if (player.id === 'p1') {
+          player.x = SharedConstants.PLAYER_P1_SPAWN.x;
+          player.y = SharedConstants.PLAYER_P1_SPAWN.y;
+        } else {
+          player.x = game.map.width - SharedConstants.PLAYER_P2_SPAWN_OFFSET.x;
+          player.y = game.map.height - SharedConstants.PLAYER_P2_SPAWN_OFFSET.y;
+        }
+
+        player.health = player.maxHealth;
+        player.shield = SharedConstants.PLAYER_BASE_SHIELD;
+        player.damage = player.defaultDamage ?? SharedConstants.PLAYER_BASE_DAMAGE;
+        player.bulletType = player.defaultBulletType ?? 1;
+        player.speed = player.defaultSpeed ?? SharedConstants.TANK_BASE_SPEED;
+        player.isInvisible = false;
+        delete player.burnEffect;
+
+        player.buffTimers = {
+          speed: 0,
+          shield: 0,
+          fireAmmo: 0,
+          clusterAmmo: 0,
+          stealth: 0
+        };
+
+        player.spawnProtection = SPAWN_PROTECTION_FRAMES;
+        player.keys = { up: false, down: false, left: false, right: false, shoot: false, priority: [] };
+        player.canShoot = true;
+        player.lastShootTime = 0;
+        player.lastDx = 0;
+        player.lastDy = -1;
+      }
+
+      game.bullets = [];
+      game.items = [];
+      game.bulletSeq = 1;
+      game.isGameOver = false;
+      game.winner = null;
+      game.isPlaying = true;
+      itemSpawnTimer = 0;
+
+      game.resetRequestPending = false;
+      game.resetRequestFrom = null;
+      game.resetRequestTo = null;
+
+      io.to(roomId).emit('gameReset', game);
+      console.log(`Game reset accepted in room: ${roomId}`);
+    } else {
+      // Player 2 từ chối → đưa cả 2 về lobby
+      io.to(roomId).emit('resetGameDeclined');
+      Object.keys(game.players).forEach(socketId => {
+        io.sockets.sockets.get(socketId)?.leave(roomId);
+      });
+      games.delete(roomId);
+      game.resetRequestPending = false;
+      game.resetRequestFrom = null;
+      game.resetRequestTo = null;
+      console.log(`Game reset declined, room ${roomId} deleted`);
+    }
+  });
+
   socket.on('leaveRoom', (data) => {
     const { roomId } = data;
     const game = games.get(roomId);
